@@ -378,7 +378,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v9';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v10';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -507,7 +507,7 @@ function shouldAdoptRemote(remoteAt, localAt, localKey, remoteKey) {
 let lastSyncError = '';
 function describeErr(e) {
   const m = String((e && e.message) || e || '');
-  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通：本机连不上 Supabase（国内网络常直连不了 supabase.co，电脑能连往往是走了代理）。换 WiFi/蜂窝对比，或开代理再试';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通：App 发不出这个请求（但 Safari 能打开 Supabase 时，多半不是断网，而是主屏 App 的联网权限/瞬时网络问题：把 App 从后台彻底划掉重开；仍不行去 设置→蜂窝网络/WLAN，确认没限制这个 App 的无线数据）';
   if (/^HTTP 401|^HTTP 403/.test(m)) return m + ' 密钥不对';
   if (/^HTTP 404/.test(m)) return m + ' 地址不对（URL 多带了 /rest/v1？）';
   if (/^HTTP 4\d\d/.test(m)) return m + ' 请求被拒';
@@ -1378,15 +1378,20 @@ async function runDiag() {
   }
   const base = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat';
   try {
-    const r = await fetch(base + '?id=eq.main&select=updated_at', {
+    const r = await fetch(base + '?id=eq.main&select=updated_at,data->settings->>model', {
       headers: { 'apikey': syncConfig.key, 'Authorization': 'Bearer ' + syncConfig.key },
     });
     lines.push('读取云端：HTTP ' + r.status);
     if (r.ok) {
       const rows = await r.json();
-      const remoteAt = rows && rows[0] && rows[0].updated_at;
+      const row = rows && rows[0];
+      const remoteAt = row && row.updated_at;
+      const remoteModel = row && row.model;
       lines.push('云端记录：' + (remoteAt ? '有，更新于 ' + remoteAt : '还没有'));
-      lines.push('新旧对比：' + (shouldAdoptRemote(remoteAt, state.meta.serverUpdatedAt || '') ? '云端更新 → 会拉取' : '本地不比云端旧'));
+      if (remoteModel !== undefined && remoteModel !== null) {
+        lines.push('云端模型：' + (remoteModel || '（空）') + '　|　本机模型：' + (state.settings.model || '（空）'));
+      }
+      lines.push('新旧对比：' + (shouldAdoptRemote(remoteAt, state.meta.serverUpdatedAt || '', state.settings.apiKey, null) ? '云端更新/本机未配好 → 会拉取' : '本地不比云端旧'));
     } else if (r.status === 401 || r.status === 403) {
       lines.push('✗ 密钥不对：Anon Key 复制错了');
     } else if (r.status === 404) {
