@@ -326,8 +326,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <div id="diag-box" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:11.5px;color:var(--muted);line-height:1.75;white-space:pre-wrap;word-break:break-all"></div>
       <div class="checkbox-row" style="margin-top:8px">
         <button class="ghost sm" id="btn-diag">立即检查并同步</button>
+        <button class="ghost sm" id="btn-force-pull">以云端为准刷新本机</button>
       </div>
-      <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。</p>
+      <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。如果显示"连不上云端"，那是手机网络到 Supabase 不通（见下方排查），不是配置错。</p>
 
       <h4>外观</h4>
       <div class="checkbox-row">
@@ -377,7 +378,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v8';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v9';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -491,8 +492,14 @@ function tsToMs(t) {
   const n = Date.parse(String(t));
   return Number.isFinite(n) ? n : 0;
 }
-function shouldAdoptRemote(remoteAt, localAt) {
+function shouldAdoptRemote(remoteAt, localAt, localKey, remoteKey) {
   if (!remoteAt) return false;
+  // 本机连 API Key 都没有（等于还没配好），云端却已经有配置 → 无条件采纳。
+  // 例：手机刚装好、只填了 Supabase 两项，此时本机是"白板"，没资格挡住云端配置。
+  // 这条同时能救回被历史 bug 污染了本地时间戳的设备：旧版 pushCloud 是
+  // "先记时间戳再发请求"，请求失败（密钥错/断网）时本地时间戳已经推进到"现在"，
+  // 此后云端永远比本地"旧"，这台设备再也拉不到云端数据——界面上就是"模型一直是 openai"。
+  if (!localKey && remoteKey) return true;
   return tsToMs(remoteAt) > tsToMs(localAt);
 }
 
@@ -500,7 +507,7 @@ function shouldAdoptRemote(remoteAt, localAt) {
 let lastSyncError = '';
 function describeErr(e) {
   const m = String((e && e.message) || e || '');
-  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通（检查网络或代理）';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通：本机连不上 Supabase（国内网络常直连不了 supabase.co，电脑能连往往是走了代理）。换 WiFi/蜂窝对比，或开代理再试';
   if (/^HTTP 401|^HTTP 403/.test(m)) return m + ' 密钥不对';
   if (/^HTTP 404/.test(m)) return m + ' 地址不对（URL 多带了 /rest/v1？）';
   if (/^HTTP 4\d\d/.test(m)) return m + ' 请求被拒';
@@ -545,15 +552,29 @@ async function pushCloud() {
       'Prefer': 'resolution=merge-duplicates'
     };
     const stamp = new Date().toISOString();
-    state.meta.serverUpdatedAt = stamp;   // 记下这次提交的时间，下次拉取靠它判断新旧
-    localStorage.setItem(LS_KEY, JSON.stringify(state));
-    const body = [{ id: 'main', data: state, updated_at: stamp }];
+    // ⚠️ 绝对不要把 stamp 在 fetch 之前落到本地！老版本就是"先记时间戳，再发请求"：
+    // 请求一旦失败（密钥被污染→401、地址多带 /rest/v1→404、断网），本地时间戳已经推进到"现在"，
+    // 而云端还停在旧时间 → 本机此后永远判定"云端更旧"→ 再也不拉云端数据。
+    // 用户看到的就是："我在电脑上早设成 deepseek 了，手机却一直是 openai 默认值。"
+    // 正确做法：stamp 只写进"要发出去的 payload"，等 HTTP 确认成功了才认它。
+    const payload = {
+      ...state,
+      meta: { ...(state.meta || {}), serverUpdatedAt: stamp, lastPushOk: true },
+    };
+    const body = [{ id: 'main', data: payload, updated_at: stamp }];
     const r = await fetch(base + '?id=eq.main', { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    state = payload;                       // ✅ 确实写进云端了，才把时间戳落到本地
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
     lastSyncError = '';
     setSyncStatus('on', '已同步');
   } catch (e) {
     console.error('pushCloud', e);
+    // 记一笔"本地有没推上去的改动"；但**绝不推进** serverUpdatedAt，
+    // 否则云端以后再也追不上本地，这台设备就"聋"了。
+    state.meta = state.meta || {};
+    state.meta.lastPushOk = false;
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e2) {}
     lastSyncError = '上传失败：' + describeErr(e);
     setSyncStatus('err', '同步失败');
   } finally {
@@ -584,10 +605,14 @@ async function pullCloud() {
       // （消息数为 0 时旧逻辑会永远判为"不更新"，导致新设备拿不到云端配置）
       const remoteAt = row.updated_at || (remote.meta && remote.meta.serverUpdatedAt) || '';
       const localAt = (state.meta && state.meta.serverUpdatedAt) || '';
-      if (shouldAdoptRemote(remoteAt, localAt)) {
+      const localKey = (state.settings && state.settings.apiKey) || '';
+      const remoteKey = (remote.settings && remote.settings.apiKey) || '';
+      if (shouldAdoptRemote(remoteAt, localAt, localKey, remoteKey)) {
         state = mergeDeep(state, remote);       // 深度合并：settings（含 API Key）也会一并过来
         if (!state.meta) state.meta = {};
         state.meta.serverUpdatedAt = remoteAt;
+        state.meta.lastPushOk = true;
+        state.meta.configSource = 'cloud';
         localStorage.setItem(LS_KEY, JSON.stringify(state));
         render();
         toast('已从云端拉取最新数据', 'ok');
@@ -1008,7 +1033,8 @@ function addPrinciple() {
 // ============================================================
 // Settings
 // ============================================================
-function showSettings() {
+// 把当前 state 的值回填进设置面板的输入框（强拉云端后要重新回填，让用户看到值变了）
+function fillSettingsInputs() {
   document.getElementById('set-base').value = state.settings.apiBase;
   document.getElementById('set-key').value = state.settings.apiKey;
   document.getElementById('set-model').value = state.settings.model;
@@ -1017,14 +1043,17 @@ function showSettings() {
   document.getElementById('set-sync-enabled').checked = syncConfig.enabled;
   document.getElementById('set-sync-url').value = syncConfig.url;
   document.getElementById('set-sync-key').value = syncConfig.key;
+  document.getElementById('set-dark').checked = !!state.settings.dark;
+  document.getElementById('set-summary').value = state.summary;
+  document.getElementById('set-auto-summarize').checked = !!state.settings.autoSummarize;
+}
+function showSettings() {
+  fillSettingsInputs();
   // 每次打开设置都收起上一次生成的链接，避免拿到过期内容
   const lb = document.getElementById('set-phone-link');
   if (lb) { lb.value = ''; lb.style.display = 'none'; }
   const cb = document.getElementById('btn-copy-link');
   if (cb) cb.style.display = 'none';
-  document.getElementById('set-dark').checked = !!state.settings.dark;
-  document.getElementById('set-summary').value = state.summary;
-  document.getElementById('set-auto-summarize').checked = !!state.settings.autoSummarize;
   renderSummaryStats();
   renderDiag();   // 打开设置就把版本/同步状态摆出来
   document.getElementById('modal-settings').classList.remove('hidden');
@@ -1324,7 +1353,11 @@ function diagLines() {
   l.push('API Key：' + (state.settings.apiKey
     ? '已填 ' + state.settings.apiKey.length + ' 字符 · 模型 ' + (state.settings.model || '—')
     : '未填（同步成功后会从云端取回）'));
-  l.push('本地上次上传时间：' + (state.meta.serverUpdatedAt || '（无，从没成功上传过）'));
+  l.push('API Base：' + (state.settings.apiBase || '—') + (state.settings.apiBase === DEFAULT_API_BASE ? '（还是默认值，没同步到/没改过）' : ''));
+  l.push('本地上次成功同步：' + (state.meta.serverUpdatedAt || '（无，从没成功同步过）'));
+  if (state.meta.lastPushOk === false) {
+    l.push('⚠️ 本机有改动还没推上云（上次上传失败）。网络恢复后会自动重试。');
+  }
   l.push('上次同步结果：' + (lastSyncError ? '失败 — ' + lastSyncError : (pulledOnce ? '正常' : '（还没连过云端）')));
   return l;
 }
@@ -1364,6 +1397,28 @@ async function runDiag() {
   }
   await pullCloud();
   box.textContent = lines.concat(['', '—— 触发一次同步后 ——'], diagLines()).join('\n');
+}
+
+// 以云端为准：清掉本地时间戳后强制采纳云端数据。
+// 兜底手段——正常情况下用不上；用于本地时间戳被历史 bug 污染、
+// 或用户明确想让云端配置覆盖本机的场合。
+async function forcePullCloud() {
+  if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) {
+    toast('先开启同步并填好 URL / Key（或用「从链接导入配置」）', 'err');
+    return;
+  }
+  if (!confirm('将用云端数据覆盖本机的设置、对话和原则（本机未上云的改动会丢）。确定继续？')) return;
+  state.meta = state.meta || {};
+  state.meta.serverUpdatedAt = '';      // 清掉本地时间戳 → 下次拉取必定采纳云端
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+  const box = document.getElementById('diag-box');
+  if (box) box.textContent = '正在以云端为准拉取…';
+  await pullCloud();
+  fillSettingsInputs();
+  renderDiag();
+  const tail = lastSyncError ? '\n\n✗ 拉取失败：' + lastSyncError : '\n\n✓ 已按云端数据刷新本机（API Key / 模型应已变过来）';
+  if (box) box.textContent = diagLines().join('\n') + tail;
+  toast(lastSyncError ? '拉取失败：' + lastSyncError : '已用云端数据刷新本机', lastSyncError ? 'err' : 'ok');
 }
 
 function applyConfigFromUrl() {
@@ -1451,6 +1506,7 @@ function init() {
   document.getElementById('btn-import-box').addEventListener('click', onImportFromBox);
   document.getElementById('btn-import-clip').addEventListener('click', onImportFromClipboard);
   document.getElementById('btn-diag').addEventListener('click', runDiag);
+  document.getElementById('btn-force-pull').addEventListener('click', forcePullCloud);
   // 粘贴即导入：手机上少了「再点一次按钮」这步
   document.getElementById('set-import').addEventListener('paste', () => {
     setTimeout(() => {
