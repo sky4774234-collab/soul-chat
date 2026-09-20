@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1c2333" media="(prefers-color-scheme: light)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="心语">
+<title>心语 · 私人对话空间</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
+<style>
+:root{
+  --bg:#f5f6f8;--card:#fff;--line:#e6e8ee;--line2:#dde0e8;
+  --ink:#1c2333;--muted:#6b7280;--faint:#9aa1af;
+  --accent:#2563eb;--accent2:#1e40af;--accent-soft:#eff4ff;
+  --user-bubble:#1c2333;--user-ink:#fff;
+  --ai-bubble:#fff;--ai-ink:#1c2333;
+  --danger:#b91c1c;--danger-soft:#fff7f7;--danger-line:#f3c6c6;
+  --r:14px;--r2:10px;
+  --shadow:0 1px 2px rgba(23,27,45,.04),0 6px 18px rgba(23,27,45,.06);
+  --shadow-lg:0 4px 12px rgba(23,27,45,.08),0 24px 48px rgba(23,27,45,.12);
+}
+[data-theme="dark"]{
+  --bg:#0f1218;--card:#161a23;--line:#222838;--line2:#2c3346;
+  --ink:#eef0f5;--muted:#9aa1b3;--faint:#5d667a;
+  --accent:#3b82f6;--accent2:#60a5fa;--accent-soft:#1e2741;
+  --user-bubble:#eef0f5;--user-ink:#0f1218;
+  --ai-bubble:#1c2231;--ai-ink:#eef0f5;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 18px rgba(0,0,0,.4);
+  --shadow-lg:0 4px 12px rgba(0,0,0,.4),0 24px 48px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#d3d7e0;border-radius:6px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#b8bdc9}
+[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#2c3346}
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover{background:#3a4358}
+::-webkit-scrollbar-track{background:transparent}
+
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;max-width:1280px;margin:0 auto;padding:0 18px}
+
+/* ========== Header ========== */
+header.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 4px 14px;border-bottom:1px solid var(--line);flex:none}
+.brand{display:flex;align-items:center;gap:11px;flex:none}
+.brand .logo{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1c2333,#3b4a63);color:#fff;font-size:18px;font-weight:600;flex:none;letter-spacing:-.5px}
+.brand h1{font-size:16px;font-weight:700;line-height:1.25;letter-spacing:-.2px}
+.brand small{display:block;color:var(--muted);font-weight:400;font-size:11px;margin-top:1px}
+.header-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+.sync-pill{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);padding:4px 10px;border-radius:14px;background:var(--card);border:1px solid var(--line)}
+.sync-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.sync-pill.s-on .dot{background:#10b981}
+.sync-pill.s-syncing .dot{background:var(--accent);animation:pulse 1.2s infinite}
+.sync-pill.s-err .dot{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.mem-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);padding:4px 9px;border-radius:14px;background:var(--card);border:1px solid var(--line);font-feature-settings:"tnum";font-weight:600;letter-spacing:-.2px}
+.mem-chip .mem-ico{color:var(--accent);font-size:8px;line-height:1}
+.mem-chip.has-summary{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+
+button{font:inherit;cursor:pointer;border-radius:9px;transition:.15s;border:1px solid var(--line2);background:var(--card);color:var(--ink);padding:7px 13px;display:inline-flex;align-items:center;gap:6px;font-size:13px}
+button:hover{border-color:var(--line2);background:#fafbfc}
+button:active{transform:translateY(.5px)}
+[data-theme="dark"] button:hover{background:#1d2230}
+button.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+button.primary:hover{background:#2c3752}
+[data-theme="dark"] button.primary{background:var(--accent);border-color:var(--accent)}
+[data-theme="dark"] button.primary:hover{background:var(--accent2)}
+button.accent{background:var(--accent);border-color:var(--accent);color:#fff}
+button.accent:hover{background:var(--accent2)}
+button.ghost{background:transparent;border-color:transparent;color:var(--muted);padding:6px 10px}
+button.ghost:hover{background:#eceef3;color:var(--ink)}
+[data-theme="dark"] button.ghost:hover{background:#1d2230}
+button.sm{padding:5px 10px;font-size:12.5px;border-radius:8px}
+button.xs{padding:3px 8px;font-size:11.5px;border-radius:7px}
+button.danger-soft{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
+button.danger-soft:hover{background:#fdecec}
+button:disabled{opacity:.5;cursor:not-allowed}
+
+/* ========== Main split layout ========== */
+.main{flex:1;display:grid;grid-template-columns:300px 1fr;gap:16px;padding:16px 0 12px;min-height:0}
+
+/* Principles panel */
+.panel-principles{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.panel-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px;border-bottom:1px solid var(--line);flex:none}
+.panel-head h3{font-size:14px;font-weight:700;letter-spacing:-.1px}
+.panel-head .badge{font-size:10.5px;color:var(--muted);background:var(--bg);padding:2px 8px;border-radius:10px;font-weight:600}
+.panel-desc{padding:10px 16px 12px;font-size:12px;color:var(--muted);line-height:1.55;border-bottom:1px solid var(--line);flex:none}
+.principles-list{flex:1;overflow-y:auto;padding:6px 12px}
+.principle-item{display:flex;align-items:flex-start;gap:6px;padding:10px 8px;border-radius:9px;transition:.12s;group:hover}
+.principle-item:hover{background:var(--bg)}
+.principle-num{flex:none;font-size:10px;color:var(--faint);font-weight:700;width:18px;text-align:center;padding-top:2px;font-feature-settings:"tnum"}
+.principle-text{flex:1;font-size:13px;line-height:1.6;background:transparent;border:none;outline:none;resize:none;color:var(--ink);font-family:inherit;min-height:1.6em;padding:0}
+.principle-text:focus{background:var(--accent-soft);border-radius:4px;margin:-1px -3px;padding:1px 3px}
+.principle-del{flex:none;background:transparent;border:none;color:var(--faint);cursor:pointer;padding:3px 6px;border-radius:6px;font-size:14px;opacity:0;transition:.12s}
+.principle-item:hover .principle-del{opacity:1}
+.principle-del:hover{background:#fdecec;color:var(--danger)}
+[data-theme="dark"] .principle-del:hover{background:#3a1f1f}
+.add-row{padding:8px 12px 14px;border-top:1px solid var(--line);flex:none}
+.add-row button{width:100%;justify-content:center;color:var(--muted);border-style:dashed}
+.add-row button:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+
+/* Chat panel */
+.panel-chat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.messages{flex:1;overflow-y:auto;padding:20px 22px;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth}
+.empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);gap:12px;padding:40px 20px;min-height:300px}
+.empty-state .ei{font-size:42px;opacity:.4}
+.empty-state p{font-size:13.5px;line-height:1.7;max-width:280px}
+.empty-state .empty-hint{font-size:11.5px;color:var(--faint);margin-top:8px}
+
+.bubble{display:flex;flex-direction:column;max-width:78%;animation:fadeUp .25s ease-out}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.bubble.user{align-self:flex-end;align-items:flex-end}
+.bubble.ai{align-self:flex-start;align-items:flex-start}
+.bubble .content{padding:11px 15px;border-radius:14px;font-size:14px;line-height:1.65;white-space:pre-wrap;word-wrap:break-word}
+.bubble.user .content{background:var(--user-bubble);color:var(--user-ink);border-bottom-right-radius:5px}
+.bubble.ai .content{background:var(--ai-bubble);color:var(--ai-ink);border:1px solid var(--line);border-bottom-left-radius:5px}
+.bubble .meta{margin-top:5px;font-size:10.5px;color:var(--faint);padding:0 4px;font-feature-settings:"tnum"}
+.bubble.thinking .content{color:var(--muted)}
+.bubble.thinking .content::after{content:"▍";animation:blink 1s infinite;color:var(--accent);margin-left:2px}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+.composer{display:flex;gap:8px;padding:14px;border-top:1px solid var(--line);background:var(--card);flex:none;align-items:flex-end}
+.composer textarea{flex:1;border:1px solid var(--line2);border-radius:11px;padding:10px 13px;font:inherit;font-size:14px;line-height:1.5;background:var(--bg);color:var(--ink);resize:none;outline:none;min-height:42px;max-height:180px;transition:.15s;font-family:inherit}
+.composer textarea:focus{border-color:var(--accent);background:var(--card)}
+.composer .send{flex:none;padding:0 18px;height:42px;font-weight:600}
+.composer .send:disabled{background:var(--line);border-color:var(--line);color:var(--muted)}
+.composer .hint{font-size:10.5px;color:var(--faint);padding:0 4px;margin-top:-4px}
+
+/* ========== Modal ========== */
+.modal{position:fixed;inset:0;background:rgba(15,18,24,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(4px);animation:fadeIn .15s}
+.modal.hidden{display:none}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal-card{background:var(--card);border-radius:18px;box-shadow:var(--shadow-lg);max-width:520px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;animation:scaleIn .2s}
+@keyframes scaleIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 14px;border-bottom:1px solid var(--line)}
+.modal-head h3{font-size:16px;font-weight:700}
+.modal-body{padding:18px 22px;overflow-y:auto}
+.modal-body h4{font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--faint);font-weight:700;margin:18px 0 8px}
+.modal-body h4:first-child{margin-top:0}
+.modal-body label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px;font-weight:500}
+.modal-body input[type=text],.modal-body input[type=password],.modal-body input[type=number],.modal-body textarea{width:100%;border:1px solid var(--line2);border-radius:9px;padding:8px 11px;font:inherit;font-size:13px;background:var(--bg);color:var(--ink);outline:none;transition:.15s;font-family:inherit}
+.modal-body textarea{resize:vertical;min-height:60px;line-height:1.55}
+.modal-body input:focus,.modal-body textarea:focus{border-color:var(--accent);background:var(--card)}
+.modal-body .hint{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.5}
+.modal-body .checkbox-row{display:flex;align-items:center;gap:8px;margin:8px 0}
+.modal-body .checkbox-row input{width:auto;margin:0}
+.modal-body ul{padding-left:20px;margin:6px 0 12px;font-size:13px;line-height:1.7;color:var(--ink)}
+.modal-body p{font-size:13px;line-height:1.65;margin:8px 0}
+.modal-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:24px;padding-top:18px;border-top:1px solid var(--line)}
+.modal-actions .left{display:flex;gap:8px}
+
+/* Toast */
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:200;box-shadow:var(--shadow-lg);animation:slideDown .25s}
+@keyframes slideDown{from{opacity:0;transform:translate(-50%,-12px)}to{opacity:1;transform:translateX(-50%)}}
+.toast.hidden{display:none}
+.toast.ok{background:#059669}
+.toast.err{background:var(--danger)}
+
+/* ========== Mobile ========== */
+@media (max-width:780px){
+  .app{padding:0 10px}
+  header.top{padding:10px 2px 10px}
+  .brand small{display:none}
+  .main{grid-template-columns:1fr;grid-template-rows:auto 1fr;gap:10px;padding:10px 0 8px}
+  .panel-principles{max-height:42vh;transition:.2s}
+  .panel-principles.collapsed{max-height:48px}
+  .panel-principles.collapsed .panel-desc,.panel-principles.collapsed .principles-list,.panel-principles.collapsed .add-row{display:none}
+  .panel-head{padding:10px 12px 8px}
+  .panel-desc{padding:8px 12px 10px;font-size:11.5px}
+  .principles-list{padding:4px 8px}
+  .principle-item{padding:8px 6px}
+  .add-row{padding:6px 8px 10px}
+  .messages{padding:14px 14px;gap:11px}
+  .bubble{max-width:88%}
+  .bubble .content{font-size:14.5px}
+  .composer{padding:10px;gap:6px}
+  .composer textarea{font-size:16px}
+  .composer .send{padding:0 14px;height:42px}
+  .header-actions .ghost-text{display:none}
+}
+
+/* Print */
+@media print{
+  header.top,.composer,.modal,.principles-list .principle-del{display:none !important}
+  .main{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <header class="top">
+    <div class="brand">
+      <div class="logo">语</div>
+      <div>
+        <h1>心语</h1>
+        <small>只和你对话 · 记住你的原则与过往</small>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="sync-pill" id="sync-pill" title="云同步状态">
+        <span class="dot"></span><span id="sync-text">本地</span>
+      </div>
+      <div class="mem-chip" id="mem-chip" title="记忆里已记住的对话">
+        <span class="mem-ico">●</span><span class="mem-label">0</span>
+      </div>
+      <button class="ghost" id="btn-export" title="导出对话为 JSON"><span class="ghost-text">导出</span></button>
+      <button class="ghost" id="btn-settings" title="设置"><span class="ghost-text">设置</span></button>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="main">
+    <!-- Principles panel -->
+    <aside class="panel-principles" id="panel-principles">
+      <div class="panel-head">
+        <div style="display:flex;align-items:center;gap:8px">
+          <h3>它记住的事</h3>
+          <span class="badge" id="principle-count">0</span>
+        </div>
+        <button class="ghost xs" id="btn-toggle-mobile">收起</button>
+      </div>
+      <p class="panel-desc">把你的人生观、长期信念、关键决策标准写在这里。AI 每次回复都会参考这些。</p>
+      <div class="principles-list" id="principles-list"></div>
+      <div class="add-row">
+        <button id="btn-add-principle">+ 新增原则</button>
+      </div>
+    </aside>
+
+    <!-- Chat panel -->
+    <section class="panel-chat">
+      <div class="messages" id="messages">
+        <div class="empty-state" id="empty-state">
+          <div class="ei">💭</div>
+          <p>把你想说的写下来。<br>它会基于你的原则和过去的对话给你反馈。</p>
+          <p class="empty-hint">先在 设置 中填一个 LLM 的 API Key 开始</p>
+        </div>
+      </div>
+      <div class="composer">
+        <textarea id="input" placeholder="想到啥说啥…" rows="1"></textarea>
+        <button class="accent send" id="btn-send">发送</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Settings modal -->
+<div class="modal hidden" id="modal-settings">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>设置</h3>
+      <button class="ghost" id="btn-close-settings">×</button>
+    </div>
+    <div class="modal-body">
+      <h4>AI 模型</h4>
+      <label>API Base</label>
+      <input type="text" id="set-base" placeholder="https://api.openai.com/v1">
+      <label>API Key</label>
+      <input type="password" id="set-key" placeholder="sk-...">
+      <label>模型</label>
+      <input type="text" id="set-model" placeholder="gpt-4o-mini / claude-3-5-sonnet 等">
+      <p class="hint">支持任何 OpenAI 兼容接口（OpenAI / Anthropic 代理 / DeepSeek / 自部署等）。Key 仅存在本地浏览器和你的 Supabase，不上传任何第三方。</p>
+
+      <h4>长期记忆（自动压缩）</h4>
+      <p class="hint">当对话累积到一定量时，AI 会把老对话自动压缩成"关键脉络"塞进 system prompt。这样无论你们聊了多少轮，AI 都不会因为上下文窗口塞满而失忆。</p>
+      <label>关键脉络（可手动编辑 / 完全抹掉 / 自己重写）</label>
+      <textarea id="set-summary" rows="7" placeholder="（还没有，AI 会自动生成）"></textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:11.5px;color:var(--muted)">
+        <span id="summary-stats">已记住 0 条 · 已压缩 0 条</span>
+        <div style="display:flex;gap:6px">
+          <button class="sm" id="btn-wipe-summary" title="只清空压缩脉络，保留所有对话原样">清空脉络</button>
+          <button class="sm" id="btn-compress-now">立即压缩</button>
+        </div>
+      </div>
+      <label>保留最近多少条对话原样（建议 12–30）</label>
+      <input type="number" id="set-recent-window" min="4" max="80" value="20">
+      <div class="checkbox-row">
+        <input type="checkbox" id="set-auto-summarize" checked>
+        <label for="set-auto-summarize" style="margin:0">每攒够 20 条新对话时自动压缩</label>
+      </div>
+
+      <h4>系统人设</h4>
+      <label>自定义系统提示（留空用默认）</label>
+      <textarea id="set-system" rows="6" placeholder="留空使用内置人格：直给建议、不和稀泥、引用过往、站在你长期利益一边"></textarea>
+
+      <h4>云同步（可选）</h4>
+      <div class="checkbox-row">
+        <input type="checkbox" id="set-sync-enabled">
+        <label for="set-sync-enabled" style="margin:0">启用 Supabase 同步</label>
+      </div>
+      <label>Supabase URL</label>
+      <input type="text" id="set-sync-url" placeholder="https://xxx.supabase.co">
+      <label>Anon Key</label>
+      <input type="password" id="set-sync-key" placeholder="eyJ...">
+      <p class="hint">启用后会在多设备之间同步你的对话和原则。复用工作台同一个 Supabase 项目即可（新建表 <code>soul_chat</code>）。</p>
+
+      <h4>外观</h4>
+      <div class="checkbox-row">
+        <input type="checkbox" id="set-dark">
+        <label for="set-dark" style="margin:0">深色模式</label>
+      </div>
+
+      <div class="modal-actions">
+        <div class="left">
+          <button class="danger-soft sm" id="btn-clear-msgs">清空对话</button>
+          <button class="danger-soft sm" id="btn-reset">重置设置</button>
+        </div>
+        <button class="primary" id="btn-save-settings">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Onboarding modal -->
+<div class="modal hidden" id="modal-onboarding">
+  <div class="modal-card">
+    <div class="modal-head"><h3>欢迎使用 心语</h3></div>
+    <div class="modal-body">
+      <p>这是一个<strong>只属于你</strong>的对话空间。它的特点：</p>
+      <ul>
+        <li>你说的话全部存在你自己的浏览器和 Supabase，不经过任何第三方服务器。</li>
+        <li>它会记住你们的全部对话，引用时会说"你之前说过…"</li>
+        <li>它会参考你在左侧录入的原则，确保反馈符合你的长期信念。</li>
+      </ul>
+      <p>下一步配置一个 LLM 的 API Key（支持任何 OpenAI 兼容接口）。</p>
+      <div class="modal-actions" style="border-top:none;margin-top:18px">
+        <button class="ghost" id="btn-skip">稍后</button>
+        <button class="primary" id="btn-go-settings">去配置</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast hidden" id="toast"></div>
+
+<script>
+'use strict';
+
+// ============================================================
+// 心语 · Soul Chat
+// ============================================================
+
+const LS_KEY = 'soul-chat-v1';
+const SYNC_LS_KEY = 'soul-chat-sync-config';
+const DEFAULT_API_BASE = 'https://api.openai.com/v1';
+const DEFAULT_MODEL = 'gpt-4o-mini';
+
+// ============================================================
+// State
+// ============================================================
+let state = {
+  meta: { version: 1, createdAt: 0 },
+  principles: [],   // [{id, text, ts}]
+  messages: [],     // [{id, content, role, ts}]  全部保留，不截断
+  summary: '',      // 长期记忆脉络（AI 自动压缩老对话得到）
+  summaryUpTo: 0,   // summary 覆盖到的消息位置（messages 数组下标）
+  settings: {
+    apiBase: DEFAULT_API_BASE,
+    apiKey: '',
+    model: DEFAULT_MODEL,
+    systemPrompt: '',
+    maxHistory: 30,    // 旧字段，向后兼容
+    recentWindow: 20,  // 每次请求保留最近多少条原样（推荐 12–30）
+    autoSummarize: true,
+    dark: false,
+  }
+};
+
+let syncConfig = { enabled: false, url: '', key: '' };
+let syncTimer = null;
+let syncing = false;
+
+// ============================================================
+// Persistence
+// ============================================================
+function loadState() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.meta) {
+        state = mergeDeep(state, parsed);
+        if (!state.meta.createdAt) state.meta.createdAt = Date.now();
+      }
+    }
+  } catch (e) { console.error('loadState', e); }
+  try {
+    const raw = localStorage.getItem(SYNC_LS_KEY);
+    if (raw) syncConfig = { ...syncConfig, ...JSON.parse(raw) };
+  } catch (e) { console.error('loadSync', e); }
+}
+
+function saveState() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+  } catch (e) { console.error('saveState', e); }
+  if (syncConfig.enabled) pushCloud();
+}
+
+function saveSyncConfig() {
+  localStorage.setItem(SYNC_LS_KEY, JSON.stringify(syncConfig));
+}
+
+function mergeDeep(target, source) {
+  const out = { ...target };
+  for (const k of Object.keys(source)) {
+    if (source[k] && typeof source[k] === 'object' && !Array.isArray(source[k]) && target[k] && typeof target[k] === 'object') {
+      out[k] = mergeDeep(target[k], source[k]);
+    } else {
+      out[k] = source[k];
+    }
+  }
+  return out;
+}
+
+// ============================================================
+// Supabase sync
+// ============================================================
+function setSyncStatus(status, text) {
+  const pill = document.getElementById('sync-pill');
+  const txt = document.getElementById('sync-text');
+  pill.classList.remove('s-on', 's-syncing', 's-err');
+  if (status) pill.classList.add('s-' + status);
+  txt.textContent = text;
+}
+
+async function pushCloud() {
+  if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
+  if (syncing) return;
+  syncing = true;
+  setSyncStatus('syncing', '上传中');
+  try {
+    const url = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat?id=eq.main';
+    const headers = {
+      'apikey': syncConfig.key,
+      'Authorization': 'Bearer ' + syncConfig.key,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates'
+    };
+    const body = [{ id: 'main', data: state, updated_at: new Date().toISOString() }];
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    setSyncStatus('on', '已同步');
+  } catch (e) {
+    console.error('pushCloud', e);
+    setSyncStatus('err', '同步失败');
+  } finally {
+    syncing = false;
+  }
+}
+
+async function pullCloud() {
+  if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
+  if (syncing) return;
+  syncing = true;
+  setSyncStatus('syncing', '拉取中');
+  try {
+    const url = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat?id=eq.main&select=data,updated_at';
+    const headers = {
+      'apikey': syncConfig.key,
+      'Authorization': 'Bearer ' + syncConfig.key,
+    };
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const arr = await r.json();
+    if (arr && arr[0] && arr[0].data) {
+      const remote = arr[0].data;
+      // 简单判定：消息数或最后一条时间不同则采用
+      const localLast = state.messages.length ? state.messages[state.messages.length - 1].ts : 0;
+      const remoteLast = (remote.messages && remote.messages.length) ? remote.messages[remote.messages.length - 1].ts : 0;
+      const localPrinciples = state.principles.length;
+      const remotePrinciples = (remote.principles || []).length;
+      if (remoteLast > localLast || (remoteLast === localLast && remotePrinciples !== localPrinciples)) {
+        state = mergeDeep(state, remote);
+        saveState();
+        render();
+        toast('已从云端拉取最新数据', 'ok');
+      }
+    }
+    setSyncStatus('on', '已同步');
+  } catch (e) {
+    console.error('pullCloud', e);
+    setSyncStatus('err', '同步失败');
+  } finally {
+    syncing = false;
+  }
+}
+
+function startSync() {
+  if (syncTimer) clearInterval(syncTimer);
+  if (syncConfig.enabled) {
+    setSyncStatus('on', '已同步');
+    pullCloud();
+    syncTimer = setInterval(pullCloud, 15000);
+  } else {
+    setSyncStatus(null, '本地');
+  }
+}
+
+// ============================================================
+// LLM call
+// ============================================================
+const DEFAULT_SYSTEM = `你是用户的私人对话伙伴。直接称呼用户为"你"。
+
+你的核心风格：
+1. 直给建议。看到问题就指出，看到方向就肯定。不同意就不同意，不和稀泥。
+2. 简洁有力。回复不重复用户的话，不用"我理解你的感受"这种开场白。能三句话说清就不写五句。
+3. 站在用户一边。永远为用户的长期利益着想，而不是讨好他。
+4. 当用户当下的说法和下面列出的原则 / 过去对话里的表态矛盾时，直接点出来（用"你之前说过…"或"这跟你写的原则冲突"的方式）。
+5. 你能看到你们之间的全部对话历史，需要时主动引用。
+
+每次回复要求：
+- 直接给判断 + 一句话理由 + 一个具体下一步
+- 长回复可以分段，但每段都要有信息量
+- 不要列表泛滥（除非确实在比较几件事）
+- 中文回复`;
+
+function buildSystemPrompt() {
+  const base = state.settings.systemPrompt.trim() || DEFAULT_SYSTEM;
+  const parts = [base];
+  if (state.principles.length) {
+    parts.push('\n\n用户已确立的原则 / 信念（这些是用户长期持有的，你应当尊重，除非用户主动说要改）：\n' +
+      state.principles.map((p, i) => `${i + 1}. ${p.text}`).join('\n'));
+  }
+  if (state.summary && state.summary.trim()) {
+    parts.push('\n\n## 与用户过往对话的关键脉络（由 AI 自动压缩老对话得到的长期记忆，可信）\n\n' + state.summary.trim() +
+      '\n\n注：以上脉络覆盖到 ' + state.summaryUpTo + ' 条对话；之后的对话会作为最近消息出现在本请求中。');
+  }
+  return parts.join('');
+}
+
+function buildMessages() {
+  const sys = { role: 'system', content: buildSystemPrompt() };
+  const recent = Math.max(4, parseInt(state.settings.recentWindow) || parseInt(state.settings.maxHistory) || 20);
+  const tail = state.messages.slice(-recent);
+  return [sys, ...tail];
+}
+
+async function callLLM(userMsg) {
+  const { apiBase, apiKey, model } = state.settings;
+  if (!apiKey) throw new Error('还没配置 API Key，请先到 设置 里填写');
+  const url = apiBase.replace(/\/$/, '') + '/chat/completions';
+  const body = {
+    model,
+    messages: buildMessages(),
+    temperature: 0.7,
+    stream: false,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`API ${r.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await r.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+// ============================================================
+// Auto-summarize (长期记忆压缩)
+// ============================================================
+let _summarizing = false;
+async function doAutoSummarize(force) {
+  if (_summarizing) return;
+  if (!state.settings.apiKey) return;
+  if (!force && !state.settings.autoSummarize) return;
+
+  const recentWindow = Math.max(4, parseInt(state.settings.recentWindow) || parseInt(state.settings.maxHistory) || 20);
+  const THRESHOLD = 20;
+  const total = state.messages.length;
+  const gap = total - state.summaryUpTo;
+  if (total <= recentWindow) return;          // 还没攒够
+  if (!force && gap < THRESHOLD) return;      // 没攒到阈值
+
+  const from = state.summaryUpTo;
+  const to = total - recentWindow;
+  if (from >= to) return;
+  const slice = state.messages.slice(from, to);
+  if (!slice.length) return;
+
+  _summarizing = true;
+  toast('正在压缩长期记忆…');
+  try {
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const firstTs = slice[0].ts;
+    const lastTs = slice[slice.length - 1].ts;
+    const range = firstTs && lastTs ?
+      `${new Date(firstTs).toLocaleDateString('zh-CN')} – ${new Date(lastTs).toLocaleDateString('zh-CN')}` :
+      dateStr;
+
+    const sysMsg = `你是记忆压缩助手。你的任务是把用户和 AI 的对话压缩成简短的"关键脉络"，保留对未来对话有价值的信息：
+- 用户的核心关切和反复出现的纠结
+- 已做出的决定和承诺
+- 用户的价值观、性格模式、情绪触发点
+- 重要事实（项目、人物、时间节点）
+- 用户说法和原则 / 过往表态的明显矛盾
+
+格式要求：
+- 简洁的要点列表，不超过 250 字
+- 第三人称"用户"
+- 不要客套话，直接给脉络
+- 若已有旧脉络，请接续并去重，不要重复`.trim();
+
+    const conv = slice.map(m =>
+      `${m.role === 'user' ? '用户' : 'AI'}: ${(m.content || '').slice(0, 600)}`
+    ).join('\n');
+
+    const userPrompt = `请把以下对话压缩并接续到已有脉络。\n\n${
+      state.summary ? `【已有脉络】\n${state.summary}\n\n` : ''
+    }【新增对话 · ${slice.length} 条 · ${range}】\n${conv}`;
+
+    const url = state.settings.apiBase.replace(/\/$/, '') + '/chat/completions';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + state.settings.apiKey,
+      },
+      body: JSON.stringify({
+        model: state.settings.model,
+        messages: [
+          { role: 'system', content: sysMsg },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.3,
+      }),
+    });
+    if (!r.ok) throw new Error('compress API ' + r.status);
+    const data = await r.json();
+    const chunk = (data.choices?.[0]?.message?.content || '').trim();
+    if (chunk) {
+      const prefix = state.summary ? state.summary.trim() + '\n\n' : '';
+      state.summary = prefix + `[${dateStr} · ${range}]\n` + chunk;
+      state.summaryUpTo = to;
+      saveState();
+      toast(`已压缩 ${slice.length} 条 → 长期记忆`, 'ok');
+      renderSummaryStats();
+      renderMemoryChip();
+    }
+  } catch (e) {
+    console.error('doAutoSummarize', e);
+    toast('压缩失败：' + (e.message || '').slice(0, 60), 'err');
+  } finally {
+    _summarizing = false;
+  }
+}
+
+// ============================================================
+// ID helpers
+// ============================================================
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// ============================================================
+// Render
+// ============================================================
+function render() {
+  renderPrinciples();
+  renderMessages();
+  applyTheme();
+  renderSummaryStats();
+  renderMemoryChip();
+}
+
+function renderMemoryChip() {
+  // 顶栏小指示器：显示当前对话 + 脉络概况
+  const chip = document.getElementById('mem-chip');
+  if (!chip) return;
+  const total = state.messages.length;
+  const covered = Math.min(state.summaryUpTo, total);
+  if (!total) {
+    chip.style.display = 'none';
+    return;
+  }
+  chip.style.display = '';
+  chip.title = `对话 ${total} 条 · 压缩覆盖 ${covered} 条 · 当前脉络 ${(state.summary || '').length} 字`;
+  const label = chip.querySelector('.mem-label');
+  if (label) label.textContent = covered > 0 ? `${covered}/${total}` : `${total}`;
+  if (state.summary && state.summary.trim()) chip.classList.add('has-summary');
+  else chip.classList.remove('has-summary');
+}
+
+function applyTheme() {
+  if (state.settings.dark) document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+}
+
+function renderPrinciples() {
+  const list = document.getElementById('principles-list');
+  list.innerHTML = '';
+  document.getElementById('principle-count').textContent = state.principles.length;
+  state.principles.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'principle-item';
+    row.dataset.id = p.id;
+    row.innerHTML = `
+      <div class="principle-num">${i + 1}</div>
+      <div class="principle-text" contenteditable="true" data-id="${p.id}">${escapeHTML(p.text)}</div>
+      <button class="principle-del" title="删除" data-id="${p.id}">×</button>
+    `;
+    list.appendChild(row);
+  });
+  // 绑定编辑
+  list.querySelectorAll('.principle-text').forEach(el => {
+    el.addEventListener('blur', () => {
+      const id = el.dataset.id;
+      const text = el.textContent.trim();
+      const p = state.principles.find(x => x.id === id);
+      if (p && text && text !== p.text) {
+        p.text = text;
+        p.ts = Date.now();
+        saveState();
+        toast('已记住', 'ok');
+      } else if (p && !text) {
+        el.textContent = p.text;
+      }
+    });
+  });
+  list.querySelectorAll('.principle-del').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.id;
+      const idx = state.principles.findIndex(x => x.id === id);
+      if (idx >= 0 && confirm('删除这条原则？')) {
+        state.principles.splice(idx, 1);
+        saveState();
+        render();
+      }
+    });
+  });
+}
+
+function renderMessages() {
+  const wrap = document.getElementById('messages');
+  const empty = document.getElementById('empty-state');
+  if (!state.messages.length) {
+    empty.style.display = '';
+    wrap.querySelectorAll('.bubble').forEach(n => n.remove());
+    return;
+  }
+  empty.style.display = 'none';
+  // diff: keep existing bubbles, only append new
+  const existing = new Set();
+  wrap.querySelectorAll('.bubble').forEach(n => existing.add(n.dataset.id));
+  state.messages.forEach(m => {
+    if (existing.has(m.id)) return;
+    wrap.appendChild(makeBubble(m));
+  });
+  scrollToBottom();
+}
+
+function makeBubble(m) {
+  const div = document.createElement('div');
+  div.className = 'bubble ' + (m.role === 'user' ? 'user' : 'ai');
+  if (m.role === 'assistant' && !m.content) div.classList.add('thinking');
+  div.dataset.id = m.id;
+  const c = document.createElement('div');
+  c.className = 'content';
+  c.textContent = m.content || '思考中…';
+  div.appendChild(c);
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = (m.role === 'user' ? '你' : '心语') + ' · ' + fmtTime(m.ts);
+  div.appendChild(meta);
+  return div;
+}
+
+function updateBubbleContent(id, content) {
+  const b = document.querySelector(`.bubble[data-id="${id}"]`);
+  if (!b) return;
+  b.classList.remove('thinking');
+  b.querySelector('.content').textContent = content;
+}
+
+function scrollToBottom() {
+  const wrap = document.getElementById('messages');
+  setTimeout(() => { wrap.scrollTop = wrap.scrollHeight; }, 0);
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function escapeHTML(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (sameDay) return hh + ':' + mm;
+  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+}
+
+function toast(msg, kind) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.remove('hidden', 'ok', 'err');
+  if (kind) t.classList.add(kind);
+  setTimeout(() => t.classList.add('hidden'), 2400);
+}
+
+// ============================================================
+// Send flow
+// ============================================================
+let sending = false;
+async function onSend() {
+  if (sending) return;
+  const ta = document.getElementById('input');
+  const text = ta.value.trim();
+  if (!text) return;
+  if (!state.settings.apiKey) {
+    showSettings();
+    toast('请先在设置里填 API Key', 'err');
+    return;
+  }
+  sending = true;
+  document.getElementById('btn-send').disabled = true;
+
+  const userMsg = { id: uid(), role: 'user', content: text, ts: Date.now() };
+  state.messages.push(userMsg);
+  saveState();
+  renderMemoryChip();
+  ta.value = '';
+  autoSize();
+  renderMessages();
+
+  // 占位 AI 消息
+  const aiMsg = { id: uid(), role: 'assistant', content: '', ts: Date.now() };
+  state.messages.push(aiMsg);
+  renderMessages();
+  scrollToBottom();
+
+  try {
+    const reply = await callLLM(text);
+    aiMsg.content = reply.trim() || '（无回复）';
+    updateBubbleContent(aiMsg.id, aiMsg.content);
+    state.messages[state.messages.length - 1] = aiMsg;
+    saveState();
+    // 后台检查是否需要压缩长期记忆
+    doAutoSummarize(false);
+  } catch (e) {
+    console.error(e);
+    // 回滚空的 ai 占位
+    state.messages.pop();
+    saveState();
+    renderMessages();
+    toast(e.message || '请求失败', 'err');
+  } finally {
+    sending = false;
+    document.getElementById('btn-send').disabled = false;
+    ta.focus();
+  }
+}
+
+// ============================================================
+// Principles CRUD
+// ============================================================
+function addPrinciple() {
+  const p = { id: uid(), text: '', ts: Date.now() };
+  state.principles.push(p);
+  saveState();
+  renderPrinciples();
+  setTimeout(() => {
+    const el = document.querySelector(`.principle-text[data-id="${p.id}"]`);
+    if (el) el.focus();
+  }, 50);
+}
+
+// ============================================================
+// Settings
+// ============================================================
+function showSettings() {
+  document.getElementById('set-base').value = state.settings.apiBase;
+  document.getElementById('set-key').value = state.settings.apiKey;
+  document.getElementById('set-model').value = state.settings.model;
+  document.getElementById('set-recent-window').value = state.settings.recentWindow;
+  document.getElementById('set-system').value = state.settings.systemPrompt;
+  document.getElementById('set-sync-enabled').checked = syncConfig.enabled;
+  document.getElementById('set-sync-url').value = syncConfig.url;
+  document.getElementById('set-sync-key').value = syncConfig.key;
+  document.getElementById('set-dark').checked = !!state.settings.dark;
+  document.getElementById('set-summary').value = state.summary;
+  document.getElementById('set-auto-summarize').checked = !!state.settings.autoSummarize;
+  renderSummaryStats();
+  document.getElementById('modal-settings').classList.remove('hidden');
+}
+function hideSettings() {
+  document.getElementById('modal-settings').classList.add('hidden');
+}
+
+function onSaveSettings() {
+  state.settings.apiBase = document.getElementById('set-base').value.trim() || DEFAULT_API_BASE;
+  state.settings.apiKey = document.getElementById('set-key').value.trim();
+  state.settings.model = document.getElementById('set-model').value.trim() || DEFAULT_MODEL;
+  const newRecent = Math.max(4, parseInt(document.getElementById('set-recent-window').value) || 20);
+  state.settings.recentWindow = newRecent;
+  state.settings.systemPrompt = document.getElementById('set-system').value;
+  state.settings.dark = document.getElementById('set-dark').checked;
+  state.settings.autoSummarize = document.getElementById('set-auto-summarize').checked;
+  // 摘要变更时同步 summaryUpTo，防止压缩错位
+  const newSummary = document.getElementById('set-summary').value;
+  if (newSummary !== state.summary) {
+    state.summary = newSummary;
+    // 用户接管了脉络：让下一次压缩从全部消息尾部向前推进（保留 recentWindow）
+    state.summaryUpTo = Math.max(0, state.messages.length - newRecent);
+  }
+  syncConfig.enabled = document.getElementById('set-sync-enabled').checked;
+  syncConfig.url = document.getElementById('set-sync-url').value.trim();
+  syncConfig.key = document.getElementById('set-sync-key').value.trim();
+  saveSyncConfig();
+  saveState();
+  render();
+  renderSummaryStats();
+  startSync();
+  hideSettings();
+  toast('已保存', 'ok');
+}
+
+function onClearMessages() {
+  if (!confirm('清空全部对话？此操作不可撤销。')) return;
+  state.messages = [];
+  saveState();
+  render();
+  toast('已清空对话', 'ok');
+}
+function onReset() {
+  if (!confirm('重置全部设置（不清空对话和原则）？')) return;
+  state.settings = {
+    apiBase: DEFAULT_API_BASE,
+    apiKey: '',
+    model: DEFAULT_MODEL,
+    systemPrompt: '',
+    maxHistory: 30,
+    recentWindow: 20,
+    autoSummarize: true,
+    dark: state.settings.dark,
+  };
+  // 脉络保留，让 AI 仍有记忆
+  syncConfig = { enabled: false, url: '', key: '' };
+  saveSyncConfig();
+  saveState();
+  render();
+  renderSummaryStats();
+  startSync();
+  hideSettings();
+  toast('已重置设置', 'ok');
+}
+
+function renderSummaryStats() {
+  const el = document.getElementById('summary-stats');
+  if (!el) return;
+  const total = state.messages.length;
+  const covered = Math.min(state.summaryUpTo, total);
+  el.textContent = `对话总数 ${total} · 已压缩 ${covered} 条 · 当前脉络 ${(state.summary || '').length} 字`;
+}
+
+function onWipeSummary() {
+  if (!confirm('清空压缩脉络（不影响对话原样）？清空后 AI 将只看到当前原则 + 最近 ' + state.settings.recentWindow + ' 条对话。')) return;
+  state.summary = '';
+  state.summaryUpTo = Math.max(0, state.messages.length - state.settings.recentWindow);
+  saveState();
+  document.getElementById('set-summary').value = '';
+  renderSummaryStats();
+  toast('已清空脉络', 'ok');
+}
+
+function onExport() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `心语-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// Composer auto-size
+// ============================================================
+function autoSize() {
+  const ta = document.getElementById('input');
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
+}
+
+// ============================================================
+// Wire up
+// ============================================================
+function init() {
+  loadState();
+  render();
+
+  // send
+  document.getElementById('btn-send').addEventListener('click', onSend);
+  const ta = document.getElementById('input');
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      onSend();
+    }
+  });
+  ta.addEventListener('input', autoSize);
+
+  // principles
+  document.getElementById('btn-add-principle').addEventListener('click', addPrinciple);
+  document.getElementById('btn-toggle-mobile').addEventListener('click', () => {
+    document.getElementById('panel-principles').classList.toggle('collapsed');
+  });
+
+  // settings
+  document.getElementById('btn-settings').addEventListener('click', showSettings);
+  document.getElementById('btn-close-settings').addEventListener('click', hideSettings);
+  document.getElementById('btn-save-settings').addEventListener('click', onSaveSettings);
+  document.getElementById('btn-clear-msgs').addEventListener('click', onClearMessages);
+  document.getElementById('btn-reset').addEventListener('click', onReset);
+
+  // long-term memory
+  document.getElementById('btn-compress-now').addEventListener('click', () => doAutoSummarize(true));
+  document.getElementById('btn-wipe-summary').addEventListener('click', onWipeSummary);
+
+  // export
+  document.getElementById('btn-export').addEventListener('click', onExport);
+
+  // onboarding
+  document.getElementById('btn-go-settings').addEventListener('click', () => {
+    document.getElementById('modal-onboarding').classList.add('hidden');
+    showSettings();
+  });
+  document.getElementById('btn-skip').addEventListener('click', () => {
+    document.getElementById('modal-onboarding').classList.add('hidden');
+  });
+
+  // 点击 modal 背景关闭
+  document.querySelectorAll('.modal').forEach(m => {
+    m.addEventListener('click', (e) => {
+      if (e.target === m && m.id !== 'modal-onboarding') m.classList.add('hidden');
+    });
+  });
+
+  startSync();
+
+  // 首次引导
+  if (!state.settings.apiKey) {
+    setTimeout(() => document.getElementById('modal-onboarding').classList.remove('hidden'), 200);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+
+// 注册 service worker（PWA 离线壳）
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
