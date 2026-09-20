@@ -1,7 +1,10 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
-// v3：应用更名（贝语）+ 延续"网络优先"导航策略。
-const CACHE = 'beiyu-v5';
+// v6：新增「从链接导入配置」（iOS 主屏 App 与 Safari 存储独立，必须 App 内导入）
+// v5：修同步新旧判定 / 拆 push·pull 锁
+// v3：应用更名（贝语）+ 导航改「网络优先」
+// v2：导航由缓存优先改网络优先（否则老用户永远看到旧版）
+const CACHE = 'beiyu-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -28,19 +31,22 @@ self.addEventListener('fetch', (e) => {
   // 跨域（LLM API / Supabase）一概不插手
   if (url.origin !== self.location.origin) return;
 
-  // 页面导航：网络优先 → 保证拿到最新版；断网时回退缓存
-  if (e.request.mode === 'navigate') {
+  // 页面导航 + manifest：网络优先 → 保证拿到最新版；断网时回退缓存
+  // （manifest 决定主屏图标名，缓存优先会让改名延迟生效）
+  const netFirst = e.request.mode === 'navigate' || /manifest\.json$/.test(url.pathname);
+  if (netFirst) {
     e.respondWith(
       fetch(e.request).then(r => {
         const copy = r.clone();
-        caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => {});
+        const key = e.request.mode === 'navigate' ? './index.html' : e.request;
+        caches.open(CACHE).then(c => c.put(key, copy)).catch(() => {});
         return r;
-      }).catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
+      }).catch(() => caches.match(e.request).then(r => r || caches.match('./index.html')))
     );
     return;
   }
 
-  // 静态资源：缓存优先
+  // 其余静态资源：缓存优先
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request).then(r => {
       const copy = r.clone();

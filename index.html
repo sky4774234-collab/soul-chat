@@ -311,6 +311,14 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <input type="text" id="set-phone-link" placeholder="点上面的按钮生成" style="display:none;margin-top:6px" readonly>
       <p class="hint">手机上打开这个链接，会自动填好上面两项并开启同步。<strong>其余设置（含 API Key）会从云端自动同步过来，手机上不用重新填。</strong></p>
 
+      <label style="margin-top:12px">从链接导入配置（手机上用这个）</label>
+      <textarea id="set-import" rows="3" placeholder="把上面那条链接整条粘进这里，会自动导入并开启同步；也可以直接点下面的「读剪贴板」"></textarea>
+      <div class="checkbox-row" style="margin-top:8px">
+        <button class="ghost sm" id="btn-import-box">导入上面框里的链接</button>
+        <button class="ghost sm" id="btn-import-clip">读剪贴板导入</button>
+      </div>
+      <p class="hint"><strong>为什么手机上要用这一步：</strong>iOS 的「添加到主屏幕」App 与 Safari 的本地存储<strong>互相独立</strong>。链接在 Safari 里点开，配置只会写进 Safari，传不进主屏 App。所以在主屏 App 里粘贴导入，一次搞定。</p>
+
       <h4>外观</h4>
       <div class="checkbox-row">
         <input type="checkbox" id="set-dark">
@@ -1099,6 +1107,96 @@ async function onCopyPhoneLink() {
   toast('已复制 → 发到微信/备忘录，手机点开即可', 'ok');
 }
 
+// 从一段文本里解析 Supabase 配置：支持整条链接 / JSON / 纯文本两段
+function parseConfigLink(text) {
+  const s = (text || '').trim();
+  if (!s) return null;
+  let u = '', k = '';
+
+  // 1) 链接形式 ?u=...&k=... 或 #u=...&k=...
+  const marks = [s.indexOf('?'), s.indexOf('#')].filter(i => i >= 0);
+  const cut = marks.length ? Math.min.apply(null, marks) : s.length;
+  const qs = s.slice(cut).replace(/^#/, '?');
+  if (qs.indexOf('=') > 0) {
+    try {
+      const q = new URLSearchParams(qs);
+      u = (q.get('u') || '').trim();
+      k = (q.get('k') || '').trim();
+    } catch (e) {}
+  }
+
+  // 2) JSON 形式
+  if (!u || !k) {
+    try {
+      const o = JSON.parse(s);
+      u = String(o.u || o.url || o.supabaseUrl || '').trim();
+      k = String(o.k || o.key || o.anonKey || '').trim();
+    } catch (e) {}
+  }
+
+  // 3) 纯文本：抓一个 http 地址 + 一段长串当 key
+  if (!u || !k) {
+    const parts = s.split(/[\s,;]+/).filter(Boolean);
+    const up = parts.find(x => /^https?:\/\//i.test(x)) || '';
+    const kp = parts.find(x => x !== up && x.length >= 40 && !/^https?:\/\//i.test(x)) || '';
+    u = u || up;
+    k = k || kp;
+  }
+
+  if (!u || !k) return null;
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return { url: u.replace(/\/+$/, ''), key: k };
+}
+
+function applyImportConfig(cfg, silent) {
+  if (!cfg) {
+    if (!silent) toast('没认出配置，请把整条链接粘进来（要含 ?u= 和 &k=）', 'err');
+    return false;
+  }
+  syncConfig.url = cfg.url;
+  syncConfig.key = cfg.key;
+  syncConfig.enabled = true;
+  saveSyncConfig();
+
+  const uEl = document.getElementById('set-sync-url');
+  const kEl = document.getElementById('set-sync-key');
+  const eEl = document.getElementById('set-sync-enabled');
+  if (uEl) uEl.value = cfg.url;
+  if (kEl) kEl.value = cfg.key;
+  if (eEl) eEl.checked = true;
+  const box = document.getElementById('set-import');
+  if (box) box.value = '';
+
+  setSyncStatus('syncing', '连接中');
+  Promise.resolve(startSync()).then(() => {
+    const keyBox = document.getElementById('set-key');
+    if (keyBox && !keyBox.value.trim() && state.settings.apiKey) {
+      keyBox.value = state.settings.apiKey;
+      toast('同步已开启，API Key 已从云端取回', 'ok');
+    } else {
+      toast('同步已开启', 'ok');
+    }
+  });
+  return true;
+}
+
+function onImportFromBox() {
+  const box = document.getElementById('set-import');
+  applyImportConfig(parseConfigLink(box ? box.value : ''), false);
+}
+
+function onImportFromClipboard() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    toast('这个环境读不了剪贴板，请把链接粘进上面的框', 'err');
+    return;
+  }
+  navigator.clipboard.readText().then(t => {
+    const cfg = parseConfigLink(t);
+    if (!cfg) { toast('剪贴板里没找到配置链接', 'err'); return; }
+    applyImportConfig(cfg, false);
+  }).catch(() => toast('读不到剪贴板：请把链接粘进上面的框再点导入', 'err'));
+}
+
 function applyConfigFromUrl() {
   let u = '', k = '';
   try {
@@ -1160,6 +1258,15 @@ function init() {
   document.getElementById('btn-save-settings').addEventListener('click', onSaveSettings);
   document.getElementById('btn-gen-link').addEventListener('click', onGenPhoneLink);
   document.getElementById('btn-copy-link').addEventListener('click', onCopyPhoneLink);
+  document.getElementById('btn-import-box').addEventListener('click', onImportFromBox);
+  document.getElementById('btn-import-clip').addEventListener('click', onImportFromClipboard);
+  // 粘贴即导入：手机上少了「再点一次按钮」这步
+  document.getElementById('set-import').addEventListener('paste', () => {
+    setTimeout(() => {
+      const box = document.getElementById('set-import');
+      if (box && box.value.trim()) applyImportConfig(parseConfigLink(box.value), true);
+    }, 40);
+  });
   document.getElementById('btn-clear-msgs').addEventListener('click', onClearMessages);
   document.getElementById('btn-reset').addEventListener('click', onReset);
 
