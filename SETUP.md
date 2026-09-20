@@ -4,7 +4,7 @@
 
 ---
 
-## 1. 在 Supabase 建表（可选，云同步需要）
+## 1. 在 Supabase 建表（多设备同步必做）
 
 进 Supabase 项目（`ihuikxutnvhfgmfmcxis`） → SQL Editor → 跑下面这条：
 
@@ -21,7 +21,7 @@ alter table soul_chat enable row level security;
 create policy "public all" on soul_chat for all using (true) with check (true);
 ```
 
-不启用同步也可以用，只是数据只存本地浏览器。
+**注意**：不建表也能用，但那样电脑和手机是**两份独立数据**，互相看不到。想两边同步，这一步必须做。
 
 ## 2. 本地试用
 
@@ -33,16 +33,37 @@ python3 -m http.server 8765
 
 打开 `http://localhost:8765`
 
-## 3. 部署到 GitHub Pages
+## 3. 部署（已完成 ✅）
 
-跟工作台一样走老路：
+**线上地址：https://sky4774234-collab.github.io/soul-chat/**
 
-1. 在 GitHub 新建仓库（比如 `xinyu` 或 `soul-chat`）
-2. 把 `soul-chat/` 里的所有文件 push 上去（**不要包含 `_make_icons.py`**，那是开发用的）
-3. Settings → Pages → 选 `main` 分支根目录
-4. 等几分钟，访问 `https://<你的用户名>.github.io/<repo名>/`
+- 仓库：`sky4774234-collab/soul-chat`（public，main 分支根目录）
+- GitHub Pages 已开启，自动 HTTPS（PWA 添加主屏幕必需）
+- 电脑和手机访问**同一个地址**
 
-或者直接 CloudStudio 部署一份（跟工作台一个套路），但不推荐长期用——CloudStudio 免费沙盒偶尔 502。
+### 以后怎么更新
+
+**方式 A（最省事）**：改完文件跟 AI 说一声"推到 soul-chat"，它帮你 commit + push。
+
+**方式 B（自己推）**：需要用你的 GitHub 账号认证一次。
+
+1. GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token，勾上 `repo` 权限
+2. 终端里跑：
+   ```bash
+   cd soul-chat
+   git add -A && git commit -m "改了啥"
+   git push origin main
+   ```
+   用户名填 `sky4774234-collab`，密码**粘贴那个 token**（不是账号密码）
+3. macOS 会把它记进钥匙串，之后就不用再输
+
+**方式 C（零环境）**：直接上 GitHub 网页打开仓库 → 点 `index.html` → 铅笔图标编辑 → Commit changes。适合只改几行文案。
+
+推送后等约 1 分钟 Pages 自动重建。浏览器可能要强刷（`⌘+Shift+R`）才看到新版。
+
+### 首次访问 404？
+
+Pages 首次构建有 1–2 分钟延迟，刷新一下就好。
 
 ## 4. 首次配置
 
