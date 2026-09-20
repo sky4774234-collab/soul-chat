@@ -327,6 +327,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <div class="checkbox-row" style="margin-top:8px">
         <button class="ghost sm" id="btn-diag">立即检查并同步</button>
         <button class="ghost sm" id="btn-force-pull">以云端为准刷新本机</button>
+        <button class="ghost sm" id="btn-test-conn">测试连接</button>
       </div>
       <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。如果显示"连不上云端"，那是手机网络到 Supabase 不通（见下方排查），不是配置错。</p>
 
@@ -347,26 +348,6 @@ button:disabled{opacity:.5;cursor:not-allowed}
   </div>
 </div>
 
-<!-- Onboarding modal -->
-<div class="modal hidden" id="modal-onboarding">
-  <div class="modal-card">
-    <div class="modal-head"><h3>欢迎使用 贝语</h3></div>
-    <div class="modal-body">
-      <p>这是一个<strong>只属于你</strong>的对话空间。它的特点：</p>
-      <ul>
-        <li>你说的话全部存在你自己的浏览器和 Supabase，不经过任何第三方服务器。</li>
-        <li>它会记住你们的全部对话，引用时会说"你之前说过…"</li>
-        <li>它会参考你在左侧录入的原则，确保反馈符合你的长期信念。</li>
-      </ul>
-      <p>下一步配置一个 LLM 的 API Key（支持任何 OpenAI 兼容接口）。</p>
-      <div class="modal-actions" style="border-top:none;margin-top:18px">
-        <button class="ghost" id="btn-skip">稍后</button>
-        <button class="primary" id="btn-go-settings">去配置</button>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- Toast -->
 <div class="toast hidden" id="toast"></div>
 
@@ -378,7 +359,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v10';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v11';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -410,6 +391,7 @@ let syncTimer = null;
 let pushing = false;
 let pulling = false;
 let pulledOnce = false;   // 是否成功从云端拉取过（防止本地空数据覆盖云端）
+let pullRetryTimer = null; // 拉取失败后的自动补拉定时器
 let pendingPush = false;  // 拉取完成前产生的本地改动，拉完补推
 
 // ============================================================
@@ -624,6 +606,11 @@ async function pullCloud() {
     console.error('pullCloud', e);
     lastSyncError = '读取失败：' + describeErr(e);
     setSyncStatus('err', '同步失败');
+    // iOS 主屏 App 从后台唤醒后的第一发请求经常失败（网络栈还没醒），3 秒后自动补一次，
+    // 免得用户每次打开都看到"同步失败"。补拉成功后 lastSyncError 会被清掉。
+    if (!pullRetryTimer && syncConfig.enabled) {
+      pullRetryTimer = setTimeout(() => { pullRetryTimer = null; pullCloud(); }, 3000);
+    }
   } finally {
     pulling = false;
     // 拉取期间攒下的本地改动，拉完补推一次
@@ -633,6 +620,7 @@ async function pullCloud() {
 
 function startSync() {
   if (syncTimer) clearInterval(syncTimer);
+  if (pullRetryTimer) { clearTimeout(pullRetryTimer); pullRetryTimer = null; }
   syncConfig.url = normalizeSupabaseUrl(syncConfig.url);
   if (syncConfig.enabled) {
     if (!pulledOnce) {
@@ -1404,6 +1392,44 @@ async function runDiag() {
   box.textContent = lines.concat(['', '—— 触发一次同步后 ——'], diagLines()).join('\n');
 }
 
+// 实时连接测试：两根探针，原始报错直出（不翻译），用于区分"网络不通"到底断在哪一环。
+// ① 极简 GET：不带任何自定义头 → 浏览器不发 CORS 预检，纯测"这台设备能不能连上这个域名"。
+// ② 带 key 的真实 GET：带 apikey/Authorization 头 → 会先发预检，等价于 App 的真实同步请求。
+// ① 败 = 设备层面连不上（断网/权限）；① 通 ② 败 = 预检或请求头环节出问题。
+async function testConnection() {
+  const box = document.getElementById('diag-box');
+  if (!box) return;
+  if (!syncConfig.url || !syncConfig.key) {
+    box.textContent = '先填好 Supabase URL / Anon Key（或用「从链接导入配置」），再测。';
+    return;
+  }
+  const base = syncConfig.url.replace(/\/$/, '');
+  const lines = ['连接测试中…'];
+  box.textContent = lines.join('\n');
+  try {
+    const t0 = Date.now();
+    const r = await fetch(base + '/rest/v1/?apikey=' + encodeURIComponent(syncConfig.key), { cache: 'no-store' });
+    lines[0] = '① 极简 GET（无自定义头）：HTTP ' + r.status + '（' + (Date.now() - t0) + 'ms）→ 域名可达';
+  } catch (e) {
+    lines[0] = '① 极简 GET（无自定义头）：✗ 原始报错「' + String((e && e.message) || e) + '」→ 设备层面连不上这个域名';
+  }
+  try {
+    const t0 = Date.now();
+    const r = await fetch(base + '/rest/v1/soul_chat?id=eq.main&select=updated_at', {
+      headers: { 'apikey': syncConfig.key, 'Authorization': 'Bearer ' + syncConfig.key },
+      cache: 'no-store',
+    });
+    lines.push('② 带 key 读取（同 App 真实请求）：HTTP ' + r.status + '（' + (Date.now() - t0) + 'ms）');
+    if (r.status === 401 || r.status === 403) lines.push('   → HTTP 401/403：Anon Key 不对，重新生成配置链接导入');
+  } catch (e) {
+    lines.push('② 带 key 读取（同 App 真实请求）：✗ 原始报错「' + String((e && e.message) || e) + '」→ 预检/请求头环节的问题');
+  }
+  lines.push('');
+  lines.push('判读：① 失败 = 这台 App 到 Supabase 网络不通（划掉 App 重开 / 重启手机 / 换网）；');
+  lines.push('　　　① 通 ② 败 = CORS 预检或请求头被拦（把本屏截图发 AI）。');
+  box.textContent = lines.join('\n');
+}
+
 // 以云端为准：清掉本地时间戳后强制采纳云端数据。
 // 兜底手段——正常情况下用不上；用于本地时间戳被历史 bug 污染、
 // 或用户明确想让云端配置覆盖本机的场合。
@@ -1512,6 +1538,7 @@ function init() {
   document.getElementById('btn-import-clip').addEventListener('click', onImportFromClipboard);
   document.getElementById('btn-diag').addEventListener('click', runDiag);
   document.getElementById('btn-force-pull').addEventListener('click', forcePullCloud);
+  document.getElementById('btn-test-conn').addEventListener('click', testConnection);
   // 粘贴即导入：手机上少了「再点一次按钮」这步
   document.getElementById('set-import').addEventListener('paste', () => {
     setTimeout(() => {
@@ -1529,27 +1556,11 @@ function init() {
   // export
   document.getElementById('btn-export').addEventListener('click', onExport);
 
-  // onboarding
-  document.getElementById('btn-go-settings').addEventListener('click', () => {
-    document.getElementById('modal-onboarding').classList.add('hidden');
-    showSettings();
-  });
-  document.getElementById('btn-skip').addEventListener('click', () => {
-    document.getElementById('modal-onboarding').classList.add('hidden');
-  });
-
   // 点击 modal 背景关闭
   document.querySelectorAll('.modal').forEach(m => {
     m.addEventListener('click', (e) => {
-      if (e.target === m && m.id !== 'modal-onboarding') m.classList.add('hidden');
+      if (e.target === m) m.classList.add('hidden');
     });
-  });
-
-  // 首次引导：开了云同步就先等第一次拉取完成，避免手机上误弹"未配置 API"
-  Promise.resolve(startSync()).catch(() => {}).then(() => {
-    if (!state.settings.apiKey) {
-      setTimeout(() => document.getElementById('modal-onboarding').classList.remove('hidden'), 200);
-    }
   });
 }
 

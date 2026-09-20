@@ -1,5 +1,6 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
+// v11：移除「欢迎使用」自动弹窗；新增「测试连接」双探针（极简 GET vs 带预检 GET，原始报错直出）；拉取失败 3s 自动补拉
 // v10：自检面板显示「云端模型 vs 本机模型」对照；网络错误文案补 iOS 主屏 App 联网权限排查
 // v9：修「手机模型一直是 openai」——
 //     1) pushCloud 不再"先落时间戳再发请求"（失败会把本地时间戳推到未来，设备从此拉不到云端）
@@ -13,7 +14,7 @@
 // v5：修同步新旧判定 / 拆 push·pull 锁
 // v3：应用更名（贝语）+ 导航改「网络优先」
 // v2：导航由缓存优先改网络优先（否则老用户永远看到旧版）
-const CACHE = 'beiyu-v10';
+const CACHE = 'beiyu-v11';
 const ASSETS = [
   './',
   './index.html',
