@@ -183,8 +183,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
   .composer{padding:8px;gap:6px}
   .composer textarea{font-size:16px;min-height:44px;max-height:120px}
   .composer .send{padding:0 16px;height:44px}
-  .header-actions .ghost-text{display:none}
-  .header-actions button{min-height:36px;min-width:36px;padding:6px 10px}
+  .ghost-ico{display:none}
+  /* 手机上必须能看见设置入口：显示图标+文字，紧凑但不隐藏 */
+  .header-actions .ghost-ico{display:inline;font-size:15px;line-height:1}
+  .header-actions .ghost-text{font-size:12.5px}
+  .header-actions button{min-height:36px;padding:6px 9px;gap:3px;display:inline-flex;align-items:center}
   .mem-chip,.sync-pill{font-size:11px;padding:4px 8px}
   /* 滚动更顺，避免 iOS 橡皮筋把整页一起拖走 */
   .messages,.principles-list{-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
@@ -215,8 +218,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <div class="mem-chip" id="mem-chip" title="记忆里已记住的对话">
         <span class="mem-ico">●</span><span class="mem-label">0</span>
       </div>
-      <button class="ghost" id="btn-export" title="导出对话为 JSON"><span class="ghost-text">导出</span></button>
-      <button class="ghost" id="btn-settings" title="设置"><span class="ghost-text">设置</span></button>
+      <button class="ghost" id="btn-export" title="导出对话为 JSON"><span class="ghost-ico">⤓</span><span class="ghost-text">导出</span></button>
+      <button class="ghost" id="btn-settings" title="设置"><span class="ghost-ico">⚙</span><span class="ghost-text">设置</span></button>
     </div>
   </header>
 
