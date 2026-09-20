@@ -7,8 +7,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="心语">
-<title>心语 · 私人对话空间</title>
+<meta name="apple-mobile-web-app-title" content="贝语">
+<title>贝语 · 私人对话空间</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="64x64" href="favicon-64.png">
@@ -204,7 +204,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="brand">
       <div class="logo">语</div>
       <div>
-        <h1>心语</h1>
+        <h1>贝语</h1>
         <small>只和你对话 · 记住你的原则与过往</small>
       </div>
     </div>
@@ -325,7 +325,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <!-- Onboarding modal -->
 <div class="modal hidden" id="modal-onboarding">
   <div class="modal-card">
-    <div class="modal-head"><h3>欢迎使用 心语</h3></div>
+    <div class="modal-head"><h3>欢迎使用 贝语</h3></div>
     <div class="modal-body">
       <p>这是一个<strong>只属于你</strong>的对话空间。它的特点：</p>
       <ul>
@@ -349,9 +349,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 'use strict';
 
 // ============================================================
-// 心语 · Soul Chat
+// 贝语 · Soul Chat
 // ============================================================
 
+const APP_NAME = '贝语';
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -512,7 +513,7 @@ function startSync() {
 // ============================================================
 // LLM call
 // ============================================================
-const DEFAULT_SYSTEM = `你是用户的私人对话伙伴。直接称呼用户为"你"。
+const DEFAULT_SYSTEM = `你叫"贝语"，是用户的私人对话伙伴。直接称呼用户为"你"。用户问你是谁时，告诉他你叫贝语。
 
 你的核心风格：
 1. 直给建议。看到问题就指出，看到方向就肯定。不同意就不同意，不和稀泥。
@@ -779,7 +780,7 @@ function makeBubble(m) {
   div.appendChild(c);
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.textContent = (m.role === 'user' ? '你' : '心语') + ' · ' + fmtTime(m.ts);
+  meta.textContent = (m.role === 'user' ? '你' : APP_NAME) + ' · ' + fmtTime(m.ts);
   div.appendChild(meta);
   return div;
 }
@@ -990,7 +991,7 @@ function onExport() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `心语-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `${APP_NAME}-${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

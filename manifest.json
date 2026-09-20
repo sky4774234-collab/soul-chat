@@ -1,6 +1,6 @@
 {
-  "name": "心语 · 私人对话空间",
-  "short_name": "心语",
+  "name": "贝语 · 私人对话空间",
+  "short_name": "贝语",
   "description": "只属于你的对话空间。它会记住你的原则与全部过往对话。",
   "start_url": "./index.html",
   "scope": "./",

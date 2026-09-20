@@ -1,7 +1,7 @@
-// 心语 · Service Worker
+// 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
-// v2：页面导航改成"网络优先"，保证每次打开都能拿到最新版；离线时才回退缓存。
-const CACHE = 'xinyu-v2';
+// v3：应用更名（贝语）+ 延续"网络优先"导航策略。
+const CACHE = 'beiyu-v3';
 const ASSETS = [
   './',
   './index.html',
