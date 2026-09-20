@@ -1,6 +1,7 @@
 // 心语 · Service Worker
-// 仅做离线壳缓存，所有真实数据在 localStorage 和 Supabase
-const CACHE = 'xinyu-v1';
+// 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
+// v2：页面导航改成"网络优先"，保证每次打开都能拿到最新版；离线时才回退缓存。
+const CACHE = 'xinyu-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -24,8 +25,22 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  // 不缓存跨域（LLM API / Supabase）
+  // 跨域（LLM API / Supabase）一概不插手
   if (url.origin !== self.location.origin) return;
+
+  // 页面导航：网络优先 → 保证拿到最新版；断网时回退缓存
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request).then(r => {
+        const copy = r.clone();
+        caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => {});
+        return r;
+      }).catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
+    );
+    return;
+  }
+
+  // 静态资源：缓存优先
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request).then(r => {
       const copy = r.clone();
