@@ -9,7 +9,7 @@
 进 Supabase 项目（`ihuikxutnvhfgmfmcxis`） → SQL Editor → 跑下面这条：
 
 ```sql
-create table soul_chat (
+create table if not exists soul_chat (
   id text primary key,
   data jsonb,
   updated_at timestamptz default now()
@@ -17,9 +17,14 @@ create table soul_chat (
 
 alter table soul_chat enable row level security;
 
--- 个人自用，开最宽松的策略即可（你的 anon key 本来权限也有限）
+-- 个人自用，开最宽松的策略即可（你的 anon key 本身权限有限）
+drop policy if exists "public all" on soul_chat;
 create policy "public all" on soul_chat for all using (true) with check (true);
 ```
+
+（`if not exists` + `drop policy if exists` 让它重复执行也不报错，放心多跑几次。）
+
+跑完点 **Run**，看到 `Success. No rows returned` 就是成了。
 
 **注意**：不建表也能用，但那样电脑和手机是**两份独立数据**，互相看不到。想两边同步，这一步必须做。
 
