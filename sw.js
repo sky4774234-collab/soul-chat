@@ -1,11 +1,14 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
+// v8：修「手机同步失败」排查到的两个环境问题——
+//     1) 页面导航一律 no-store，绕开 GitHub Pages 的 max-age=600（老用户看不到新版）
+//     2) 缓存版本 +1，强制已装用户换新壳
 // v7：手机端顶部常显「设置/导出」按钮（原来文字被隐藏又无图标，看起来像没有设置入口）
 // v6：新增「从链接导入配置」（iOS 主屏 App 与 Safari 存储独立，必须 App 内导入）
 // v5：修同步新旧判定 / 拆 push·pull 锁
 // v3：应用更名（贝语）+ 导航改「网络优先」
 // v2：导航由缓存优先改网络优先（否则老用户永远看到旧版）
-const CACHE = 'beiyu-v7';
+const CACHE = 'beiyu-v8';
 const ASSETS = [
   './',
   './index.html',
@@ -36,8 +39,17 @@ self.addEventListener('fetch', (e) => {
   // （manifest 决定主屏图标名，缓存优先会让改名延迟生效）
   const netFirst = e.request.mode === 'navigate' || /manifest\.json$/.test(url.pathname);
   if (netFirst) {
+    // no-store：GitHub Pages 会给 HTML 打 max-age=600，只用"网络优先"仍可能拿到十分钟前的旧页面
+    // （改完前端、手机上却没变，多半就是它）
+    const req = new Request(e.request.url, {
+      method: 'GET',
+      cache: 'no-store',
+      mode: 'same-origin',
+      credentials: 'same-origin',
+      redirect: 'follow',
+    });
     e.respondWith(
-      fetch(e.request).then(r => {
+      fetch(req).then(r => {
         const copy = r.clone();
         const key = e.request.mode === 'navigate' ? './index.html' : e.request;
         caches.open(CACHE).then(c => c.put(key, copy)).catch(() => {});

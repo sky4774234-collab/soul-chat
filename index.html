@@ -322,6 +322,13 @@ button:disabled{opacity:.5;cursor:not-allowed}
       </div>
       <p class="hint"><strong>为什么手机上要用这一步：</strong>iOS 的「添加到主屏幕」App 与 Safari 的本地存储<strong>互相独立</strong>。链接在 Safari 里点开，配置只会写进 Safari，传不进主屏 App。所以在主屏 App 里粘贴导入，一次搞定。</p>
 
+      <label style="margin-top:12px">同步自检</label>
+      <div id="diag-box" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:11.5px;color:var(--muted);line-height:1.75;white-space:pre-wrap;word-break:break-all"></div>
+      <div class="checkbox-row" style="margin-top:8px">
+        <button class="ghost sm" id="btn-diag">立即检查并同步</button>
+      </div>
+      <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。</p>
+
       <h4>外观</h4>
       <div class="checkbox-row">
         <input type="checkbox" id="set-dark">
@@ -370,6 +377,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
+const APP_VERSION = 'v8';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -420,6 +428,7 @@ function loadState() {
   try {
     const raw = localStorage.getItem(SYNC_LS_KEY);
     if (raw) syncConfig = { ...syncConfig, ...JSON.parse(raw) };
+    syncConfig.url = normalizeSupabaseUrl(syncConfig.url);   // 历史脏数据也顺手修好
   } catch (e) { console.error('loadSync', e); }
 }
 
@@ -432,6 +441,18 @@ function saveState() {
 
 function saveSyncConfig() {
   localStorage.setItem(SYNC_LS_KEY, JSON.stringify(syncConfig));
+}
+
+// 归一化 Supabase 地址：手机上手填很容易多带/少带东西，这里统一收拾干净。
+// 常见错法：没写 https://、结尾多了斜杠、把 /rest/v1 也粘进来了（会导致 URL 变成 /rest/v1/rest/v1/... 全部 404）
+function normalizeSupabaseUrl(input) {
+  let u = String(input || '').trim();
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;   // 少写协议头
+  u = u.replace(/\/+$/, '');                           // 结尾斜杠
+  u = u.replace(/\/rest\/v1.*$/i, '');                 // 误带 REST 路径
+  u = u.replace(/\/+$/, '');
+  return u;
 }
 
 function mergeDeep(target, source) {
@@ -455,14 +476,36 @@ function setSyncStatus(status, text) {
   pill.classList.remove('s-on', 's-syncing', 's-err');
   if (status) pill.classList.add('s-' + status);
   txt.textContent = text;
+  // 失败时把原因挂在状态条上，点一下就能看到详情
+  pill.title = status === 'err' && lastSyncError ? lastSyncError + '（点一下看详情）' : '点一下打开设置';
+  pill.style.cursor = 'pointer';
 }
 
 // 判断是否该采纳云端数据：比较 Supabase 行上的 updated_at 与本地记录的上次提交时间。
 // 关键：不能用"消息时间戳/消息条数"来判断——新设备上两者都是 0，会永远判为"不更新"，
 // 于是新设备拿不到云端已有配置（API Key 等），用户被迫重填。
+// 也不能直接用字符串比大小：云端回的是 `...+00:00`，本地写的是 `...Z`，精度也可能不同
+// （云端可能整秒、本地带毫秒），字符串比较会在这些边界上判错。一律解析成毫秒再比。
+function tsToMs(t) {
+  if (!t) return 0;
+  const n = Date.parse(String(t));
+  return Number.isFinite(n) ? n : 0;
+}
 function shouldAdoptRemote(remoteAt, localAt) {
   if (!remoteAt) return false;
-  return String(remoteAt) > String(localAt || '');
+  return tsToMs(remoteAt) > tsToMs(localAt);
+}
+
+// 把异常整理成一句能直接给用户看的短话（手机上没法开控制台，必须把原因写在界面上）
+let lastSyncError = '';
+function describeErr(e) {
+  const m = String((e && e.message) || e || '');
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通（检查网络或代理）';
+  if (/^HTTP 401|^HTTP 403/.test(m)) return m + ' 密钥不对';
+  if (/^HTTP 404/.test(m)) return m + ' 地址不对（URL 多带了 /rest/v1？）';
+  if (/^HTTP 4\d\d/.test(m)) return m + ' 请求被拒';
+  if (/^HTTP 5\d\d/.test(m)) return m + ' 云端服务异常';
+  return m || '未知错误';
 }
 
 async function pushCloud() {
@@ -473,7 +516,28 @@ async function pushCloud() {
   pushing = true;
   setSyncStatus('syncing', '上传中');
   try {
-    const url = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat?id=eq.main';
+    const base = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat';
+    const authHeaders = {
+      'apikey': syncConfig.key,
+      'Authorization': 'Bearer ' + syncConfig.key,
+    };
+    // 上传前先问一句"云端有没有比我知道的更新"。开着很久的页面（或旧版页面）
+    // 手里是旧数据，直接整份覆盖会把别处的新改动抹掉，所以先比对一次时间戳。
+    try {
+      const probe = await fetch(base + '?id=eq.main&select=updated_at', { headers: authHeaders });
+      if (probe.ok) {
+        const rows = await probe.json();
+        const remoteAt = rows && rows[0] && rows[0].updated_at;
+        const localAt = (state.meta && state.meta.serverUpdatedAt) || '';
+        if (shouldAdoptRemote(remoteAt, localAt)) {
+          pendingPush = true;        // 先合并云端的新数据，拉完会自动补推本次改动
+          pushing = false;
+          await pullCloud();
+          return;
+        }
+      }
+    } catch (e) { /* 探测失败不阻塞正常上传 */ }
+
     const headers = {
       'apikey': syncConfig.key,
       'Authorization': 'Bearer ' + syncConfig.key,
@@ -484,11 +548,13 @@ async function pushCloud() {
     state.meta.serverUpdatedAt = stamp;   // 记下这次提交的时间，下次拉取靠它判断新旧
     localStorage.setItem(LS_KEY, JSON.stringify(state));
     const body = [{ id: 'main', data: state, updated_at: stamp }];
-    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const r = await fetch(base + '?id=eq.main', { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
+    lastSyncError = '';
     setSyncStatus('on', '已同步');
   } catch (e) {
     console.error('pushCloud', e);
+    lastSyncError = '上传失败：' + describeErr(e);
     setSyncStatus('err', '同步失败');
   } finally {
     pushing = false;
@@ -527,9 +593,11 @@ async function pullCloud() {
         toast('已从云端拉取最新数据', 'ok');
       }
     }
+    lastSyncError = '';
     setSyncStatus('on', '已同步');
   } catch (e) {
     console.error('pullCloud', e);
+    lastSyncError = '读取失败：' + describeErr(e);
     setSyncStatus('err', '同步失败');
   } finally {
     pulling = false;
@@ -540,13 +608,23 @@ async function pullCloud() {
 
 function startSync() {
   if (syncTimer) clearInterval(syncTimer);
+  syncConfig.url = normalizeSupabaseUrl(syncConfig.url);
   if (syncConfig.enabled) {
-    setSyncStatus('on', '已同步');
+    if (!pulledOnce) {
+      setSyncStatus('syncing', '连接中');   // 还没连上过就别假装"已同步"
+    }
     syncTimer = setInterval(pullCloud, 15000);
     return pullCloud();   // 返回首次拉取 promise，调用方可等待同步完成
   }
   setSyncStatus(null, '本地');
   return Promise.resolve();
+}
+
+// 手机放口袋里再拿出来 / 切回前台时立刻同步一次（不等 15 秒轮询）
+function setupForegroundSync() {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && syncConfig.enabled) pullCloud();
+  });
 }
 
 // ============================================================
@@ -948,6 +1026,7 @@ function showSettings() {
   document.getElementById('set-summary').value = state.summary;
   document.getElementById('set-auto-summarize').checked = !!state.settings.autoSummarize;
   renderSummaryStats();
+  renderDiag();   // 打开设置就把版本/同步状态摆出来
   document.getElementById('modal-settings').classList.remove('hidden');
 }
 function hideSettings() {
@@ -971,15 +1050,16 @@ function onSaveSettings() {
     state.summaryUpTo = Math.max(0, state.messages.length - newRecent);
   }
   syncConfig.enabled = document.getElementById('set-sync-enabled').checked;
-  syncConfig.url = document.getElementById('set-sync-url').value.trim();
+  syncConfig.url = normalizeSupabaseUrl(document.getElementById('set-sync-url').value);
   syncConfig.key = document.getElementById('set-sync-key').value.trim();
+  document.getElementById('set-sync-url').value = syncConfig.url;   // 回填清洗后的地址，让用户看见实际用的值
   saveSyncConfig();
   saveState();
   render();
   renderSummaryStats();
   startSync();
   hideSettings();
-  toast('已保存', 'ok');
+  toast(syncConfig.enabled ? '已保存，正在同步…' : '已保存', 'ok');
 }
 
 function onClearMessages() {
@@ -1081,12 +1161,13 @@ function setupViewport() {
 // 一键配置：带 ?u=<Supabase URL>&k=<anon key> 打开，自动填好并启用同步
 // 生成"手机一键配置"链接：把同步配置拼进 URL，手机上点开即自动配好
 function onGenPhoneLink() {
-  const u = document.getElementById('set-sync-url').value.trim().replace(/\/+$/, '');
+  const u = normalizeSupabaseUrl(document.getElementById('set-sync-url').value);
   const k = document.getElementById('set-sync-key').value.trim();
   if (!u || !k) {
     toast('先把上面的 Supabase URL 和 Anon Key 填好', 'err');
     return;
   }
+  document.getElementById('set-sync-url').value = u;
   const link = location.origin + location.pathname +
     '?u=' + encodeURIComponent(u) + '&k=' + encodeURIComponent(k);
   const box = document.getElementById('set-phone-link');
@@ -1110,17 +1191,36 @@ async function onCopyPhoneLink() {
   toast('已复制 → 发到微信/备忘录，手机点开即可', 'ok');
 }
 
+// Supabase 的 anon key 是 JWT（xxx.yyy.zzz），用形状把它从一段文本里认出来最可靠
+function pickJwt(s) {
+  const m = String(s || '').match(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/);
+  return m ? m[0] : '';
+}
+// 清掉 key 尾巴上沾到的东西（空格、中文、标点）。被污染的 key 存进去 = 401 = 同步失败
+function cleanKey(k) {
+  const x = String(k || '').trim();
+  const jwt = pickJwt(x);
+  if (jwt) return jwt;
+  return x.split(/[\s，。、；：！？"'"'（）()【】]+/)[0].trim();
+}
+
 // 从一段文本里解析 Supabase 配置：支持整条链接 / JSON / 纯文本两段
 function parseConfigLink(text) {
   const s = (text || '').trim();
   if (!s) return null;
   let u = '', k = '';
 
+  // 先把"链接本身"抠出来。粘贴时经常带着前后文字（"看这个 <链接> 手机上打开"），
+  // 不抠干净的话，链接尾巴上的中文会被当成 k 的一部分 → 密钥就是错的 → 同步必然失败。
+  const urlM = s.match(/https?:\/\/[^\s"'<>]+/i);
+  const linkToken = urlM ? urlM[0].replace(/[)\]）】」』>，。；、!?！？]+$/, '') : '';
+
   // 1) 链接形式 ?u=...&k=... 或 #u=...&k=...
-  const marks = [s.indexOf('?'), s.indexOf('#')].filter(i => i >= 0);
-  const cut = marks.length ? Math.min.apply(null, marks) : s.length;
-  const qs = s.slice(cut).replace(/^#/, '?');
-  if (qs.indexOf('=') > 0) {
+  const qsSource = linkToken || s;
+  const marks = [qsSource.indexOf('?'), qsSource.indexOf('#')].filter(i => i >= 0);
+  if (marks.length) {
+    const cut = Math.min.apply(null, marks);
+    const qs = qsSource.slice(cut).replace(/^#/, '?');
     try {
       const q = new URLSearchParams(qs);
       u = (q.get('u') || '').trim();
@@ -1132,23 +1232,28 @@ function parseConfigLink(text) {
   if (!u || !k) {
     try {
       const o = JSON.parse(s);
-      u = String(o.u || o.url || o.supabaseUrl || '').trim();
-      k = String(o.k || o.key || o.anonKey || '').trim();
+      u = u || String(o.u || o.url || o.supabaseUrl || '').trim();
+      k = k || String(o.k || o.key || o.anonKey || '').trim();
     } catch (e) {}
   }
 
-  // 3) 纯文本：抓一个 http 地址 + 一段长串当 key
+  // 3) 纯文本：抓一个 http 地址 + 一个 JWT
   if (!u || !k) {
     const parts = s.split(/[\s,;]+/).filter(Boolean);
-    const up = parts.find(x => /^https?:\/\//i.test(x)) || '';
-    const kp = parts.find(x => x !== up && x.length >= 40 && !/^https?:\/\//i.test(x)) || '';
+    const up = linkToken || parts.find(x => /^https?:\/\//i.test(x)) || '';
+    const jwt = pickJwt(s);
+    const kp = jwt || parts.find(x => x !== up && x.length >= 40 && !/^https?:\/\//i.test(x)) || '';
     u = u || up;
     k = k || kp;
   }
 
+  // 收尾：地址同样只保留 http(s) 那一段
+  const um = String(u || '').match(/https?:\/\/[^\s"']+/i);
+  if (um) u = um[0];
+  k = cleanKey(k);
+
   if (!u || !k) return null;
-  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
-  return { url: u.replace(/\/+$/, ''), key: k };
+  return { url: normalizeSupabaseUrl(u), key: k };
 }
 
 function applyImportConfig(cfg, silent) {
@@ -1156,7 +1261,7 @@ function applyImportConfig(cfg, silent) {
     if (!silent) toast('没认出配置，请把整条链接粘进来（要含 ?u= 和 &k=）', 'err');
     return false;
   }
-  syncConfig.url = cfg.url;
+  syncConfig.url = normalizeSupabaseUrl(cfg.url);
   syncConfig.key = cfg.key;
   syncConfig.enabled = true;
   saveSyncConfig();
@@ -1164,7 +1269,7 @@ function applyImportConfig(cfg, silent) {
   const uEl = document.getElementById('set-sync-url');
   const kEl = document.getElementById('set-sync-key');
   const eEl = document.getElementById('set-sync-enabled');
-  if (uEl) uEl.value = cfg.url;
+  if (uEl) uEl.value = syncConfig.url;
   if (kEl) kEl.value = cfg.key;
   if (eEl) eEl.checked = true;
   const box = document.getElementById('set-import');
@@ -1172,6 +1277,12 @@ function applyImportConfig(cfg, silent) {
 
   setSyncStatus('syncing', '连接中');
   Promise.resolve(startSync()).then(() => {
+    renderDiag();
+    // 导入后马上把结果说清楚：成功给证据（API Key 已取回），失败给原因——手机上没法开控制台
+    if (!pulledOnce) {
+      toast('同步失败：' + (lastSyncError || '连不上云端'), 'err');
+      return;
+    }
     const keyBox = document.getElementById('set-key');
     if (keyBox && !keyBox.value.trim() && state.settings.apiKey) {
       keyBox.value = state.settings.apiKey;
@@ -1200,6 +1311,61 @@ function onImportFromClipboard() {
   }).catch(() => toast('读不到剪贴板：请把链接粘进上面的框再点导入', 'err'));
 }
 
+// ============================================================
+// 同步自检：手机上开不了控制台，把关键信息直接印在设置里
+// ============================================================
+function diagLines() {
+  const l = [];
+  const swOk = ('serviceWorker' in navigator) && navigator.serviceWorker.controller;
+  l.push('版本：' + APP_VERSION + (swOk ? '（离线壳已接管）' : '（未接管，可能是首次加载）'));
+  l.push('同步开关：' + (syncConfig.enabled ? '已开启' : '未开启'));
+  if (syncConfig.url) l.push('Supabase 地址：' + syncConfig.url);
+  if (syncConfig.key) l.push('Anon Key：已填 ' + syncConfig.key.length + ' 字符');
+  l.push('API Key：' + (state.settings.apiKey
+    ? '已填 ' + state.settings.apiKey.length + ' 字符 · 模型 ' + (state.settings.model || '—')
+    : '未填（同步成功后会从云端取回）'));
+  l.push('本地上次上传时间：' + (state.meta.serverUpdatedAt || '（无，从没成功上传过）'));
+  l.push('上次同步结果：' + (lastSyncError ? '失败 — ' + lastSyncError : (pulledOnce ? '正常' : '（还没连过云端）')));
+  return l;
+}
+
+function renderDiag() {
+  const box = document.getElementById('diag-box');
+  if (box) box.textContent = diagLines().join('\n');
+}
+
+async function runDiag() {
+  const box = document.getElementById('diag-box');
+  if (!box) return;
+  const lines = ['正在检查…'];
+  box.textContent = lines.join('\n');
+  if (!syncConfig.url || !syncConfig.key) {
+    box.textContent = diagLines().concat(['', '✗ 配置不全：先填上面的 URL 和 Key，或用「从链接导入配置」']).join('\n');
+    return;
+  }
+  const base = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat';
+  try {
+    const r = await fetch(base + '?id=eq.main&select=updated_at', {
+      headers: { 'apikey': syncConfig.key, 'Authorization': 'Bearer ' + syncConfig.key },
+    });
+    lines.push('读取云端：HTTP ' + r.status);
+    if (r.ok) {
+      const rows = await r.json();
+      const remoteAt = rows && rows[0] && rows[0].updated_at;
+      lines.push('云端记录：' + (remoteAt ? '有，更新于 ' + remoteAt : '还没有'));
+      lines.push('新旧对比：' + (shouldAdoptRemote(remoteAt, state.meta.serverUpdatedAt || '') ? '云端更新 → 会拉取' : '本地不比云端旧'));
+    } else if (r.status === 401 || r.status === 403) {
+      lines.push('✗ 密钥不对：Anon Key 复制错了');
+    } else if (r.status === 404) {
+      lines.push('✗ 找不到数据表 soul_chat（或地址多带了 /rest/v1）');
+    }
+  } catch (e) {
+    lines.push('读取云端：✗ ' + describeErr(e));
+  }
+  await pullCloud();
+  box.textContent = lines.concat(['', '—— 触发一次同步后 ——'], diagLines()).join('\n');
+}
+
 function applyConfigFromUrl() {
   let u = '', k = '';
   try {
@@ -1213,8 +1379,7 @@ function applyConfigFromUrl() {
     }
   } catch (e) { return; }
   if (!u || !k) return;
-  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
-  syncConfig.url = u.replace(/\/+$/, '');
+  syncConfig.url = normalizeSupabaseUrl(u);
   syncConfig.key = k;
   syncConfig.enabled = true;
   saveSyncConfig();
@@ -1223,10 +1388,30 @@ function applyConfigFromUrl() {
   setTimeout(() => toast('已自动配好云同步', 'ok'), 700);
 }
 
+// 版本自更新：iOS 主屏 App 有时会一直跑旧版页面（于是"改好了但手机没变"）。
+// 这里主动查一次 SW 更新，装上新版后自动重载一次，用户不用删图标重加。
+function setupVersionSelfUpdate() {
+  if (!('serviceWorker' in navigator)) return;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded) return;
+    reloaded = true;
+    if (!sessionStorage.getItem('beiyu-reloaded')) {
+      sessionStorage.setItem('beiyu-reloaded', '1');
+      location.reload();
+    }
+  });
+  navigator.serviceWorker.getRegistrations()
+    .then(rs => rs.forEach(r => r.update().catch(() => {})))
+    .catch(() => {});
+}
+
 function init() {
   loadState();
   applyConfigFromUrl();   // 手机端零手填：URL 参数直接配好云同步
   setupViewport();        // 软键盘弹出时保持输入框可见
+  setupVersionSelfUpdate(); // 主动装新版，避免手机上一直跑旧代码
+  setupForegroundSync();    // 切回前台立刻同步
   render();
 
   // send
@@ -1257,12 +1442,15 @@ function init() {
 
   // settings
   document.getElementById('btn-settings').addEventListener('click', showSettings);
+  // 状态条也能点开设置：手机上多一个入口，同步失败时顺手看原因
+  document.getElementById('sync-pill').addEventListener('click', showSettings);
   document.getElementById('btn-close-settings').addEventListener('click', hideSettings);
   document.getElementById('btn-save-settings').addEventListener('click', onSaveSettings);
   document.getElementById('btn-gen-link').addEventListener('click', onGenPhoneLink);
   document.getElementById('btn-copy-link').addEventListener('click', onCopyPhoneLink);
   document.getElementById('btn-import-box').addEventListener('click', onImportFromBox);
   document.getElementById('btn-import-clip').addEventListener('click', onImportFromClipboard);
+  document.getElementById('btn-diag').addEventListener('click', runDiag);
   // 粘贴即导入：手机上少了「再点一次按钮」这步
   document.getElementById('set-import').addEventListener('paste', () => {
     setTimeout(() => {

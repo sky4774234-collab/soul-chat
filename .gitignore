@@ -1,3 +1,6 @@
 _make_icons.py
 _push_via_api.py
+_probe_sync.mjs
+_check.mjs
+__pycache__/
 .DS_Store
