@@ -201,6 +201,18 @@ button:disabled{opacity:.5;cursor:not-allowed}
 </style>
 </head>
 <body>
+<!-- 微信/QQ 内置浏览器提示：这类 webview 不支持 SW 且常拦截 supabase.co 请求，必须引导去 Safari -->
+<div id="wechat-tip" class="hidden" style="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px">
+  <div style="background:#fff;border-radius:14px;max-width:420px;width:100%;padding:22px 20px;color:#222;line-height:1.7;font-size:15px">
+    <h3 style="margin:0 0 10px;font-size:17px">请在 Safari 中打开贝语</h3>
+    <p style="margin:0 0 12px">你正在微信里浏览。微信内置浏览器不支持离线缓存，还常拦截同步请求——这就是「同步失败」的原因。微信本身打不开它，不是配置问题。</p>
+    <p style="margin:0 0 16px"><strong>正确做法（一次即可）：</strong><br>
+    1. 点右上角「···」→ 选择「在浏览器中打开」（或「复制链接」后在 Safari 粘贴打开）<br>
+    2. 在 Safari 里点分享按钮 → 「添加到主屏幕」<br>
+    3. 以后都从主屏幕的「贝语」图标进入</p>
+    <button onclick="document.getElementById('wechat-tip').classList.add('hidden')" style="width:100%;padding:12px;border:none;border-radius:10px;background:#1a56db;color:#fff;font-size:15px">我知道了，仍要继续浏览</button>
+  </div>
+</div>
 <div class="app">
   <!-- Header -->
   <header class="top">
@@ -359,7 +371,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v11';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v12';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -1498,6 +1510,10 @@ function init() {
   setupViewport();        // 软键盘弹出时保持输入框可见
   setupVersionSelfUpdate(); // 主动装新版，避免手机上一直跑旧代码
   setupForegroundSync();    // 切回前台立刻同步
+  // 微信/QQ 等内置浏览器：无 SW、常拦 supabase.co，直接给出"去 Safari"引导
+  if (/MicroMessenger|QQ\//i.test(navigator.userAgent)) {
+    document.getElementById('wechat-tip').classList.remove('hidden');
+  }
   render();
 
   // send

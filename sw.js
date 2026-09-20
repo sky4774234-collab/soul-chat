@@ -1,5 +1,6 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
+// v12：微信/QQ 内置浏览器打开时弹出「请用 Safari 打开」引导（webview 无 SW 且常拦 supabase.co）
 // v11：移除「欢迎使用」自动弹窗；新增「测试连接」双探针（极简 GET vs 带预检 GET，原始报错直出）；拉取失败 3s 自动补拉
 // v10：自检面板显示「云端模型 vs 本机模型」对照；网络错误文案补 iOS 主屏 App 联网权限排查
 // v9：修「手机模型一直是 openai」——
@@ -14,7 +15,7 @@
 // v5：修同步新旧判定 / 拆 push·pull 锁
 // v3：应用更名（贝语）+ 导航改「网络优先」
 // v2：导航由缓存优先改网络优先（否则老用户永远看到旧版）
-const CACHE = 'beiyu-v11';
+const CACHE = 'beiyu-v12';
 const ASSETS = [
   './',
   './index.html',
