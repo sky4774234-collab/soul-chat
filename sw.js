@@ -1,7 +1,7 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
 // v3：应用更名（贝语）+ 延续"网络优先"导航策略。
-const CACHE = 'beiyu-v3';
+const CACHE = 'beiyu-v5';
 const ASSETS = [
   './',
   './index.html',

@@ -304,6 +304,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <label>Anon Key</label>
       <input type="password" id="set-sync-key" placeholder="eyJ...">
       <p class="hint">启用后会在多设备之间同步你的对话和原则。复用工作台同一个 Supabase 项目即可（新建表 <code>soul_chat</code>）。</p>
+      <div class="checkbox-row" style="margin-top:8px">
+        <button class="ghost sm" id="btn-gen-link">生成手机配置链接</button>
+        <button class="ghost sm" id="btn-copy-link" style="display:none">复制</button>
+      </div>
+      <input type="text" id="set-phone-link" placeholder="点上面的按钮生成" style="display:none;margin-top:6px" readonly>
+      <p class="hint">手机上打开这个链接，会自动填好上面两项并开启同步。<strong>其余设置（含 API Key）会从云端自动同步过来，手机上不用重新填。</strong></p>
 
       <h4>外观</h4>
       <div class="checkbox-row">
@@ -381,7 +387,10 @@ let state = {
 
 let syncConfig = { enabled: false, url: '', key: '' };
 let syncTimer = null;
-let syncing = false;
+let pushing = false;
+let pulling = false;
+let pulledOnce = false;   // 是否成功从云端拉取过（防止本地空数据覆盖云端）
+let pendingPush = false;  // 拉取完成前产生的本地改动，拉完补推
 
 // ============================================================
 // Persistence
@@ -437,10 +446,20 @@ function setSyncStatus(status, text) {
   txt.textContent = text;
 }
 
+// 判断是否该采纳云端数据：比较 Supabase 行上的 updated_at 与本地记录的上次提交时间。
+// 关键：不能用"消息时间戳/消息条数"来判断——新设备上两者都是 0，会永远判为"不更新"，
+// 于是新设备拿不到云端已有配置（API Key 等），用户被迫重填。
+function shouldAdoptRemote(remoteAt, localAt) {
+  if (!remoteAt) return false;
+  return String(remoteAt) > String(localAt || '');
+}
+
 async function pushCloud() {
   if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
-  if (syncing) return;
-  syncing = true;
+  if (pushing) return;
+  // 还没成功拉过一次 → 先不推，避免把本地空数据覆盖掉云端已有内容
+  if (!pulledOnce) { pendingPush = true; return; }
+  pushing = true;
   setSyncStatus('syncing', '上传中');
   try {
     const url = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat?id=eq.main';
@@ -450,7 +469,10 @@ async function pushCloud() {
       'Content-Type': 'application/json',
       'Prefer': 'resolution=merge-duplicates'
     };
-    const body = [{ id: 'main', data: state, updated_at: new Date().toISOString() }];
+    const stamp = new Date().toISOString();
+    state.meta.serverUpdatedAt = stamp;   // 记下这次提交的时间，下次拉取靠它判断新旧
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    const body = [{ id: 'main', data: state, updated_at: stamp }];
     const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     setSyncStatus('on', '已同步');
@@ -458,14 +480,14 @@ async function pushCloud() {
     console.error('pushCloud', e);
     setSyncStatus('err', '同步失败');
   } finally {
-    syncing = false;
+    pushing = false;
   }
 }
 
 async function pullCloud() {
   if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
-  if (syncing) return;
-  syncing = true;
+  if (pulling) return;
+  pulling = true;
   setSyncStatus('syncing', '拉取中');
   try {
     const url = syncConfig.url.replace(/\/$/, '') + '/rest/v1/soul_chat?id=eq.main&select=data,updated_at';
@@ -476,16 +498,20 @@ async function pullCloud() {
     const r = await fetch(url, { headers });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const arr = await r.json();
-    if (arr && arr[0] && arr[0].data) {
-      const remote = arr[0].data;
-      // 简单判定：消息数或最后一条时间不同则采用
-      const localLast = state.messages.length ? state.messages[state.messages.length - 1].ts : 0;
-      const remoteLast = (remote.messages && remote.messages.length) ? remote.messages[remote.messages.length - 1].ts : 0;
-      const localPrinciples = state.principles.length;
-      const remotePrinciples = (remote.principles || []).length;
-      if (remoteLast > localLast || (remoteLast === localLast && remotePrinciples !== localPrinciples)) {
-        state = mergeDeep(state, remote);
-        saveState();
+    const row = arr && arr[0];
+    pulledOnce = true;   // 请求成功（即使还没有数据行）→ 允许后续推送
+
+    if (row && row.data) {
+      const remote = row.data;
+      // 用行上的 updated_at 判断新旧，而不是消息时间戳
+      // （消息数为 0 时旧逻辑会永远判为"不更新"，导致新设备拿不到云端配置）
+      const remoteAt = row.updated_at || (remote.meta && remote.meta.serverUpdatedAt) || '';
+      const localAt = (state.meta && state.meta.serverUpdatedAt) || '';
+      if (shouldAdoptRemote(remoteAt, localAt)) {
+        state = mergeDeep(state, remote);       // 深度合并：settings（含 API Key）也会一并过来
+        if (!state.meta) state.meta = {};
+        state.meta.serverUpdatedAt = remoteAt;
+        localStorage.setItem(LS_KEY, JSON.stringify(state));
         render();
         toast('已从云端拉取最新数据', 'ok');
       }
@@ -495,7 +521,9 @@ async function pullCloud() {
     console.error('pullCloud', e);
     setSyncStatus('err', '同步失败');
   } finally {
-    syncing = false;
+    pulling = false;
+    // 拉取期间攒下的本地改动，拉完补推一次
+    if (pulledOnce && pendingPush) { pendingPush = false; pushCloud(); }
   }
 }
 
@@ -503,11 +531,11 @@ function startSync() {
   if (syncTimer) clearInterval(syncTimer);
   if (syncConfig.enabled) {
     setSyncStatus('on', '已同步');
-    pullCloud();
     syncTimer = setInterval(pullCloud, 15000);
-  } else {
-    setSyncStatus(null, '本地');
+    return pullCloud();   // 返回首次拉取 promise，调用方可等待同步完成
   }
+  setSyncStatus(null, '本地');
+  return Promise.resolve();
 }
 
 // ============================================================
@@ -900,6 +928,11 @@ function showSettings() {
   document.getElementById('set-sync-enabled').checked = syncConfig.enabled;
   document.getElementById('set-sync-url').value = syncConfig.url;
   document.getElementById('set-sync-key').value = syncConfig.key;
+  // 每次打开设置都收起上一次生成的链接，避免拿到过期内容
+  const lb = document.getElementById('set-phone-link');
+  if (lb) { lb.value = ''; lb.style.display = 'none'; }
+  const cb = document.getElementById('btn-copy-link');
+  if (cb) cb.style.display = 'none';
   document.getElementById('set-dark').checked = !!state.settings.dark;
   document.getElementById('set-summary').value = state.summary;
   document.getElementById('set-auto-summarize').checked = !!state.settings.autoSummarize;
@@ -1035,6 +1068,37 @@ function setupViewport() {
 }
 
 // 一键配置：带 ?u=<Supabase URL>&k=<anon key> 打开，自动填好并启用同步
+// 生成"手机一键配置"链接：把同步配置拼进 URL，手机上点开即自动配好
+function onGenPhoneLink() {
+  const u = document.getElementById('set-sync-url').value.trim().replace(/\/+$/, '');
+  const k = document.getElementById('set-sync-key').value.trim();
+  if (!u || !k) {
+    toast('先把上面的 Supabase URL 和 Anon Key 填好', 'err');
+    return;
+  }
+  const link = location.origin + location.pathname +
+    '?u=' + encodeURIComponent(u) + '&k=' + encodeURIComponent(k);
+  const box = document.getElementById('set-phone-link');
+  box.value = link;
+  box.style.display = '';
+  document.getElementById('btn-copy-link').style.display = '';
+  toast('链接已生成，点"复制"发到手机', 'ok');
+}
+
+async function onCopyPhoneLink() {
+  const box = document.getElementById('set-phone-link');
+  if (!box.value) return;
+  try {
+    await navigator.clipboard.writeText(box.value);
+  } catch (e) {
+    box.removeAttribute('readonly');
+    box.select();
+    try { document.execCommand('copy'); } catch (e2) {}
+    box.setAttribute('readonly', '');
+  }
+  toast('已复制 → 发到微信/备忘录，手机点开即可', 'ok');
+}
+
 function applyConfigFromUrl() {
   let u = '', k = '';
   try {
@@ -1094,6 +1158,8 @@ function init() {
   document.getElementById('btn-settings').addEventListener('click', showSettings);
   document.getElementById('btn-close-settings').addEventListener('click', hideSettings);
   document.getElementById('btn-save-settings').addEventListener('click', onSaveSettings);
+  document.getElementById('btn-gen-link').addEventListener('click', onGenPhoneLink);
+  document.getElementById('btn-copy-link').addEventListener('click', onCopyPhoneLink);
   document.getElementById('btn-clear-msgs').addEventListener('click', onClearMessages);
   document.getElementById('btn-reset').addEventListener('click', onReset);
 
@@ -1120,12 +1186,12 @@ function init() {
     });
   });
 
-  startSync();
-
-  // 首次引导
-  if (!state.settings.apiKey) {
-    setTimeout(() => document.getElementById('modal-onboarding').classList.remove('hidden'), 200);
-  }
+  // 首次引导：开了云同步就先等第一次拉取完成，避免手机上误弹"未配置 API"
+  Promise.resolve(startSync()).catch(() => {}).then(() => {
+    if (!state.settings.apiKey) {
+      setTimeout(() => document.getElementById('modal-onboarding').classList.remove('hidden'), 200);
+    }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);
