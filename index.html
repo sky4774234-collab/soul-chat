@@ -132,6 +132,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .composer .hint{font-size:10.5px;color:var(--faint);padding:0 4px;margin-top:-4px}
 
 /* ========== Modal ========== */
+/* 微信提示：需要自己的 hidden 规则（元素带内联 display:flex，必须 !important） */
+#wechat-tip.hidden{display:none !important}
 .modal{position:fixed;inset:0;background:rgba(15,18,24,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(4px);animation:fadeIn .15s}
 .modal.hidden{display:none}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -191,6 +193,53 @@ button:disabled{opacity:.5;cursor:not-allowed}
   .mem-chip,.sync-pill{font-size:11px;padding:4px 8px}
   /* 滚动更顺，避免 iOS 橡皮筋把整页一起拖走 */
   .messages,.principles-list{-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+
+  /* ===== 自适应：弹窗 ===== */
+  .modal{padding:8px}
+  .modal-card{border-radius:14px;max-height:calc(100dvh - 16px)}
+  .modal-head{padding:12px 14px 10px}
+  .modal-head h3{font-size:15.5px}
+  .modal-body{padding:12px 14px;max-height:calc(100dvh - 60px);overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .modal-body h4{margin-top:14px}
+  .modal-body h4:first-child{margin-top:0}
+  .modal-body input[type=text],.modal-body input[type=password],.modal-body input[type=number],.modal-body textarea{font-size:14px;padding:9px 11px}
+  .modal-body .hint{font-size:11px}
+  /* 关闭按钮（×）加大触摸目标 */
+  #btn-close-settings{min-width:36px;min-height:36px;padding:4px 10px;font-size:18px;line-height:1}
+  /* checkbox-row 必须可换行——否则长按钮文字会被截断成 2 行 */
+  .checkbox-row{flex-wrap:wrap;gap:6px}
+  .checkbox-row > *{min-width:0}
+  /* 弹窗内按钮一律不断行——中文按钮名断行非常难看 */
+  .modal-body button{white-space:nowrap}
+  /* 诊断 / 同步三个按钮：纵向堆叠，每列占满 */
+  .checkbox-row .ghost.sm{flex:1 1 auto;text-align:center;justify-content:center;white-space:nowrap;font-size:12px;padding:6px 10px}
+  /* 弹窗底部操作行：清空/重置 折叠在上，保存单独成行 */
+  .modal-actions{flex-wrap:wrap;justify-content:flex-end;gap:6px}
+  .modal-actions .left{flex:1 1 auto;display:flex;gap:6px;flex-wrap:wrap}
+  .modal-actions .left button{flex:1 1 auto;font-size:12px}
+  .modal-actions .primary{flex:1 1 100%;order:10;margin-top:4px}
+  /* 诊断面板字号更紧凑 */
+  #diag-box{font-size:11px;padding:8px;line-height:1.7}
+  /* 文本域占满、不溢出 */
+  .modal-body textarea{font-size:14px}
+}
+
+/* ===== 极窄屏（iPhone SE/12 mini 之类）===== */
+@media (max-width:380px){
+  .brand h1{font-size:14.5px}
+  .header-actions .ghost-text{font-size:11px}
+  .header-actions button{padding:5px 7px;min-height:32px}
+  .sync-pill,.mem-chip{font-size:10.5px;padding:3px 6px}
+  .modal{padding:6px}
+  .modal-card{max-height:calc(100dvh - 12px)}
+  .modal-body{padding:10px 12px}
+  .modal-body input[type=text],.modal-body input[type=password],.modal-body input[type=number],.modal-body textarea{font-size:13.5px;padding:8px 10px}
+  .bubble{max-width:92%}
+}
+
+/* 横屏 / 大屏手机（iPad mini 等）—— 改回左右分栏 */
+@media (min-width:780px) and (max-width:1024px){
+  .main{grid-template-columns:260px 1fr;gap:12px}
 }
 
 /* Print */
@@ -371,7 +420,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v12';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v13';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
