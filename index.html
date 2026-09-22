@@ -242,6 +242,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
   .main{grid-template-columns:260px 1fr;gap:12px}
 }
 
+.bubble.ai .reasoning{font-size:12px;opacity:.62;border-left:2px solid currentColor;padding:2px 0 2px 8px;margin-bottom:6px;white-space:pre-wrap;max-height:150px;overflow:auto}
+.bubble.thinking .content{opacity:.6}
+
 /* Print */
 @media print{
   header.top,.composer,.modal,.principles-list .principle-del{display:none !important}
@@ -390,6 +393,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
         <button class="ghost sm" id="btn-force-pull">以云端为准刷新本机</button>
         <button class="ghost sm" id="btn-test-conn">测试连接</button>
         <button class="ghost sm" id="btn-reset-shell">重置离线壳并刷新</button>
+        <button class="ghost sm" id="btn-test-llm">测试模型</button>
       </div>
       <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。如果显示"连不上云端"，那是手机网络到 Supabase 不通（见下方排查），不是配置错。</p>
 
@@ -421,7 +425,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v18';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v19';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -467,6 +471,15 @@ function loadState() {
       if (parsed && parsed.meta) {
         state = mergeDeep(state, parsed);
         if (!state.meta.createdAt) state.meta.createdAt = Date.now();
+      }
+      // 清掉历史遗留的"空回复"：请求横跨一次刷新就会留下这种残留，
+      // 界面上永远是"思考中…"，看着像卡死（用户实测就是这个现象）。
+      if (Array.isArray(state.messages)) {
+        const before = state.messages.length;
+        state.messages = state.messages.filter(m => !(m.role === 'assistant' && !String(m.content || '').trim() && !m.reasoning));
+        if (state.messages.length !== before) {
+          try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+        }
       }
     }
   } catch (e) { console.error('loadState', e); }
@@ -784,26 +797,49 @@ async function callLLM(userMsg) {
     temperature: 0.7,
     stream: false,
   };
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + apiKey,
-    },
-    body: JSON.stringify(body),
-  });
+  // 推理模型（deepseek-v4-pro 这类）会先输出思考内容，慢的时候要几十秒。
+  // 没有超时的话请求会一直挂着、界面永久停在"思考中…"——必须给个上限。
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 180000);
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e && e.name === 'AbortError') {
+      throw new Error('等了 180 秒没响应（推理模型很慢，或这条网络被拦）。可以换更快的模型，例如 deepseek-chat');
+    }
+    throw new Error('连不上模型接口（' + String((e && e.message) || e) + '）：检查 API Base 是否可访问、是否被浏览器/插件拦了');
+  }
+  clearTimeout(timer);
   if (!r.ok) {
     const text = await r.text().catch(() => '');
     throw new Error(`API ${r.status}: ${text.slice(0, 200)}`);
   }
   const data = await r.json();
-  return data.choices?.[0]?.message?.content || '';
+  const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+  return {
+    content: String(msg.content || '').trim(),
+    reasoning: String(msg.reasoning_content || '').trim(),   // 推理模型的思考过程
+    model: data.model || model,
+  };
 }
 
 // ============================================================
 // Auto-summarize (长期记忆压缩)
 // ============================================================
 let _summarizing = false;
+const pendingIds = new Set();   // 正在等回复的占位消息 id（刷新后不再误显示为"思考中"）
+let thinkingTimer = null;       // 等待秒数的定时器
+
 async function doAutoSummarize(force) {
   if (_summarizing) return;
   if (!state.settings.apiKey) return;
@@ -997,17 +1033,40 @@ function renderMessages() {
 function makeBubble(m) {
   const div = document.createElement('div');
   div.className = 'bubble ' + (m.role === 'user' ? 'user' : 'ai');
-  if (m.role === 'assistant' && !m.content) div.classList.add('thinking');
+  const body = String(m.content || '').trim();
+  const isPending = m.role === 'assistant' && !body && pendingIds.has(m.id);
+  if (isPending) div.classList.add('thinking');
   div.dataset.id = m.id;
+  // 推理模型的思考过程：小字灰框，先显示在回答上面
+  if (m.role === 'assistant' && m.reasoning) {
+    const rb = document.createElement('div');
+    rb.className = 'reasoning';
+    rb.textContent = m.reasoning;
+    div.appendChild(rb);
+  }
   const c = document.createElement('div');
   c.className = 'content';
-  c.textContent = m.content || '思考中…';
+  c.textContent = body || (isPending ? '思考中…' : '（这条没收到回复 · 重新发一次即可）');
   div.appendChild(c);
   const meta = document.createElement('div');
   meta.className = 'meta';
   meta.textContent = (m.role === 'user' ? '你' : APP_NAME) + ' · ' + fmtTime(m.ts);
   div.appendChild(meta);
   return div;
+}
+
+function updateBubbleText(id, text) {
+  const b = document.querySelector(`.bubble[data-id="${id}"]`);
+  if (!b) return;
+  const c = b.querySelector('.content');
+  if (c && b.classList.contains('thinking')) c.textContent = text;
+}
+
+// 整条重画（需要带出思考内容时用；updateBubbleContent 只改文本）
+function refreshBubble(m) {
+  const b = document.querySelector(`.bubble[data-id="${m.id}"]`);
+  if (!b) return;
+  b.replaceWith(makeBubble(m));
 }
 
 function updateBubbleContent(id, content) {
@@ -1074,25 +1133,44 @@ async function onSend() {
   // 占位 AI 消息
   const aiMsg = { id: uid(), role: 'assistant', content: '', ts: Date.now() };
   state.messages.push(aiMsg);
+  pendingIds.add(aiMsg.id);
   renderMessages();
   scrollToBottom();
 
+  // 让"正在等"看得见：每秒更新一次秒数——推理模型慢，用户需要知道它还活着
+  const t0 = Date.now();
+  if (thinkingTimer) clearInterval(thinkingTimer);
+  thinkingTimer = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    updateBubbleText(aiMsg.id, '思考中… ' + s + 's' + (s >= 12 ? '（推理模型较慢，请稍候）' : ''));
+  }, 1000);
+
   try {
-    const reply = await callLLM(text);
-    aiMsg.content = reply.trim() || '（无回复）';
-    updateBubbleContent(aiMsg.id, aiMsg.content);
+    const res = await callLLM(text);
+    aiMsg.reasoning = res.reasoning;
+    if (res.content) {
+      aiMsg.content = res.content;
+    } else if (res.reasoning) {
+      aiMsg.content = '（这次只输出了思考过程，没有给出正式回答——多半是回答额度被推理占满了。再发一次，或换更快的模型。）';
+    } else {
+      aiMsg.content = '（模型返回了空内容）';
+    }
     state.messages[state.messages.length - 1] = aiMsg;
     saveState();
+    refreshBubble(aiMsg);   // 带思考内容重画这一条
     // 后台检查是否需要压缩长期记忆
     doAutoSummarize(false);
   } catch (e) {
     console.error(e);
     // 回滚空的 ai 占位
     state.messages.pop();
+    pendingIds.delete(aiMsg.id);
     saveState();
     renderMessages();
     toast(e.message || '请求失败', 'err');
   } finally {
+    pendingIds.delete(aiMsg.id);
+    if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
     sending = false;
     document.getElementById('btn-send').disabled = false;
     ta.focus();
@@ -1583,6 +1661,51 @@ async function testConnection() {
   box.textContent = lines.join('\n');
 }
 
+// 测试模型接口：把「能不能聊天」的每一环都印出来（地址/密钥/HTTP/耗时/内容长度/原始错误）。
+// 起因：界面上"思考中…"永不结束，看不出是密钥错、模型慢、还是被拦。
+async function testLLM() {
+  const box = document.getElementById('diag-box');
+  const out = ['正在测试模型接口…'];
+  const { apiBase, apiKey, model } = state.settings;
+  out.push('API Base：' + (apiBase || '（空）'));
+  out.push('模型：' + (model || '（空）'));
+  out.push('API Key：' + (apiKey ? '已填 ' + apiKey.length + ' 字符（前缀 ' + apiKey.slice(0, 6) + '）' : '未填'));
+  if (!apiKey || !apiBase || !model) {
+    out.push('✗ 上面三项都要填好');
+    if (box) box.textContent = out.join('\n');
+    return;
+  }
+  if (box) box.textContent = out.concat(['', '请求中（推理模型可能要几十秒）…']).join('\n');
+  const t0 = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180000);
+    const r = await fetch(apiBase.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], temperature: 0.7 }),
+    });
+    clearTimeout(timer);
+    out.push('HTTP：' + r.status + '（耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + 's）');
+    const data = await r.json().catch(() => null);
+    if (!data) out.push('✗ 返回的不是 JSON');
+    else if (data.error) out.push('✗ 接口报错：' + JSON.stringify(data.error).slice(0, 200));
+    else {
+      const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+      const ct = String(msg.content || '').trim();
+      const rc = String(msg.reasoning_content || '').trim();
+      out.push('正式回答：' + (ct ? ct.length + ' 字 — ' + ct.slice(0, 50) : '（空）'));
+      out.push('思考内容：' + (rc ? rc.length + ' 字（推理模型，正常）' : '无'));
+      out.push(ct ? '✓ 接口通畅，可以正常对话' : '⚠ 接口通了但回答为空——把模型换成 deepseek-chat 试试');
+    }
+  } catch (e) {
+    out.push('✗ 请求失败（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）：' +
+      (e && e.name === 'AbortError' ? '180 秒超时（模型太慢或被拦）' : String((e && e.message) || e)));
+  }
+  if (box) box.textContent = out.join('\n');
+}
+
 // 一键重置离线壳：卸载所有 Service Worker + 清空缓存后重载页面。
 // 用途：手机里装着旧壳、旧壳拦请求导致同步失败——这种故障在界面上看不出来，只能一键重置。
 async function resetShell() {
@@ -1750,6 +1873,7 @@ function init() {
   document.getElementById('btn-force-pull').addEventListener('click', forcePullCloud);
   document.getElementById('btn-test-conn').addEventListener('click', testConnection);
   document.getElementById('btn-reset-shell').addEventListener('click', resetShell);
+  document.getElementById('btn-test-llm').addEventListener('click', testLLM);
   // 粘贴即导入：手机上少了「再点一次按钮」这步
   document.getElementById('set-import').addEventListener('paste', () => {
     setTimeout(() => {
