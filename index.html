@@ -389,6 +389,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
         <button class="ghost sm" id="btn-diag">立即检查并同步</button>
         <button class="ghost sm" id="btn-force-pull">以云端为准刷新本机</button>
         <button class="ghost sm" id="btn-test-conn">测试连接</button>
+        <button class="ghost sm" id="btn-reset-shell">重置离线壳并刷新</button>
       </div>
       <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。如果显示"连不上云端"，那是手机网络到 Supabase 不通（见下方排查），不是配置错。</p>
 
@@ -420,7 +421,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v16';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v17';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -1451,6 +1452,7 @@ function diagLines() {
   const swOk = ('serviceWorker' in navigator) && navigator.serviceWorker.controller;
   l.push('版本：' + APP_VERSION + (swOk ? '（离线壳已接管）' : '（未接管，可能是首次加载）'));
   l.push('环境：' + browserEnv());
+  l.push('离线壳脚本：' + (swVersion ? swVersion : (swOk ? '（未回报，可能是旧壳，点下面的「重置离线壳」）' : '（无，未安装）')));
   l.push('同步开关：' + (syncConfig.enabled ? '已开启' : '未开启'));
   if (syncConfig.url) l.push('Supabase 地址：' + syncConfig.url);
   if (syncConfig.key) l.push('Anon Key：已填 ' + syncConfig.key.length + ' 字符');
@@ -1558,6 +1560,23 @@ async function testConnection() {
   box.textContent = lines.join('\n');
 }
 
+// 一键重置离线壳：卸载所有 Service Worker + 清空缓存后重载页面。
+// 用途：手机里装着旧壳、旧壳拦请求导致同步失败——这种故障在界面上看不出来，只能一键重置。
+async function resetShell() {
+  if (!confirm('会卸载离线缓存并重新加载页面（你的对话和设置不受影响，云端数据不动）。继续？')) return;
+  try {
+    if ('serviceWorker' in navigator) {
+      const rs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(rs.map(r => r.unregister()));
+    }
+    if (window.caches) {
+      const ks = await caches.keys();
+      await Promise.all(ks.map(k => caches.delete(k)));
+    }
+  } catch (e) { console.error('resetShell', e); }
+  location.reload();
+}
+
 // 以云端为准：清掉本地时间戳后强制采纳云端数据。
 // 兜底手段——正常情况下用不上；用于本地时间戳被历史 bug 污染、
 // 或用户明确想让云端配置覆盖本机的场合。
@@ -1604,8 +1623,17 @@ function applyConfigFromUrl() {
 
 // 版本自更新：iOS 主屏 App 有时会一直跑旧版页面（于是"改好了但手机没变"）。
 // 这里主动查一次 SW 更新，装上新版后自动重载一次，用户不用删图标重加。
+let swVersion = '';   // 当前离线壳回报的版本（由 sw.js 通过 postMessage 告知）
 function setupVersionSelfUpdate() {
   if (!('serviceWorker' in navigator)) return;
+  // 问一下壳：你是哪一版？（旧壳的 fetch 逻辑会拦跨站请求，是同步失败的隐藏元凶）
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type === 'sw-version') { swVersion = d.cache || '未知'; renderDiag(); }
+  });
+  if (navigator.serviceWorker.controller) {
+    try { navigator.serviceWorker.controller.postMessage('version'); } catch (e) {}
+  }
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (reloaded) return;
@@ -1674,6 +1702,7 @@ function init() {
   document.getElementById('btn-diag').addEventListener('click', runDiag);
   document.getElementById('btn-force-pull').addEventListener('click', forcePullCloud);
   document.getElementById('btn-test-conn').addEventListener('click', testConnection);
+  document.getElementById('btn-reset-shell').addEventListener('click', resetShell);
   // 粘贴即导入：手机上少了「再点一次按钮」这步
   document.getElementById('set-import').addEventListener('paste', () => {
     setTimeout(() => {

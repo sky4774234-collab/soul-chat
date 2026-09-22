@@ -1,5 +1,6 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
+// v17：新增 message('version') 回报当前离线壳版本（识别'手机里装的是旧壳'）；页面侧可一键重置壳
 // v16：诊断新增「环境」行（识别浏览器+UA）；非 Safari 浏览器（Chrome/Edge/夸克/UC…）打开时弹「请用 Safari」引导\n// v15：同步层整体重做为「个人工作台」同款（内容不同即整份采纳云端，弃用时间戳比较+深合并）；诊断新增 workbench 表对照探针\n// v14：拉取失败自动双探针（结果并入诊断）；报错文案缩短；启动时清洗历史脏 key；toast 限宽
 // v13：移动端全面自适应（≤980px 弹窗紧凑、诊断按钮纵向堆叠、横屏分栏、≤380px 极窄屏优化）
 // v12：微信/QQ 内置浏览器打开时弹出「请用 Safari 打开」引导（webview 无 SW 且常拦 supabase.co）
@@ -17,7 +18,7 @@
 // v5：修同步新旧判定 / 拆 push·pull 锁
 // v3：应用更名（贝语）+ 导航改「网络优先」
 // v2：导航由缓存优先改网络优先（否则老用户永远看到旧版）
-const CACHE = 'beiyu-v16';
+const CACHE = 'beiyu-v17';
 const ASSETS = [
   './',
   './index.html',
@@ -37,6 +38,13 @@ self.addEventListener('activate', (e) => {
     caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
   );
   self.clients.claim();
+});
+
+// 页面可用 postMessage('version') 询问当前离线壳版本——手机上"改了前端还是失败"可能是壳本身是旧的。
+self.addEventListener('message', (e) => {
+  if (e.data === 'version' && e.source) {
+    e.source.postMessage({ type: 'sw-version', cache: CACHE });
+  }
 });
 
 self.addEventListener('fetch', (e) => {
