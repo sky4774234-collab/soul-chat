@@ -157,7 +157,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .modal-actions .left{display:flex;gap:8px}
 
 /* Toast */
-.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:200;box-shadow:var(--shadow-lg);animation:slideDown .25s}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:200;box-shadow:var(--shadow-lg);animation:slideDown .25s;max-width:calc(100vw - 32px);text-align:center}
 @keyframes slideDown{from{opacity:0;transform:translate(-50%,-12px)}to{opacity:1;transform:translateX(-50%)}}
 .toast.hidden{display:none}
 .toast.ok{background:#059669}
@@ -420,7 +420,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v13';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v14';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -473,6 +473,7 @@ function loadState() {
     const raw = localStorage.getItem(SYNC_LS_KEY);
     if (raw) syncConfig = { ...syncConfig, ...JSON.parse(raw) };
     syncConfig.url = normalizeSupabaseUrl(syncConfig.url);   // 历史脏数据也顺手修好
+    syncConfig.key = cleanKey(syncConfig.key);               // v8 之前存进去的 key 可能沾了杂字符
   } catch (e) { console.error('loadSync', e); }
 }
 
@@ -550,12 +551,40 @@ function shouldAdoptRemote(remoteAt, localAt, localKey, remoteKey) {
 let lastSyncError = '';
 function describeErr(e) {
   const m = String((e && e.message) || e || '');
-  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通：App 发不出这个请求（但 Safari 能打开 Supabase 时，多半不是断网，而是主屏 App 的联网权限/瞬时网络问题：把 App 从后台彻底划掉重开；仍不行去 设置→蜂窝网络/WLAN，确认没限制这个 App 的无线数据）';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络不通（浏览器拒发请求，详见探针结果）';
   if (/^HTTP 401|^HTTP 403/.test(m)) return m + ' 密钥不对';
   if (/^HTTP 404/.test(m)) return m + ' 地址不对（URL 多带了 /rest/v1？）';
   if (/^HTTP 4\d\d/.test(m)) return m + ' 请求被拒';
   if (/^HTTP 5\d\d/.test(m)) return m + ' 云端服务异常';
   return m || '未知错误';
+}
+
+// 双探针自动诊断：拉取失败时自动跑一次（2 分钟节流），结果并进 lastSyncError。
+// ① 无自定义头 GET（不发预检，测域名可达性）；② 带 key 的真实 GET（等价同步请求）。
+// ①败 = 本机到 supabase.co 网络层被断；①通②败 = 预检/请求头被拦；双通 = 瞬时抖动。
+let lastProbe = { at: 0, text: '' };
+async function autoProbe() {
+  if (!syncConfig.url || !syncConfig.key) return '';
+  if (Date.now() - lastProbe.at < 120000) return lastProbe.text;
+  const base = syncConfig.url.replace(/\/$/, '');
+  let a = '', b = '';
+  try {
+    const r = await fetch(base + '/rest/v1/?apikey=' + encodeURIComponent(syncConfig.key), { cache: 'no-store' });
+    a = 'HTTP ' + r.status;
+  } catch (e) { a = '✗' + String((e && e.message) || e); }
+  try {
+    const r = await fetch(base + '/rest/v1/soul_chat?id=eq.main&select=updated_at', {
+      headers: { 'apikey': syncConfig.key, 'Authorization': 'Bearer ' + syncConfig.key },
+      cache: 'no-store',
+    });
+    b = 'HTTP ' + r.status;
+  } catch (e) { b = '✗' + String((e && e.message) || e); }
+  let verdict;
+  if (a.charAt(0) === '✗') verdict = '本机到 Supabase 网络层不通（换 WiFi/蜂窝对比、重启手机）';
+  else if (b.charAt(0) === '✗') verdict = '裸请求通、带 key 失败 → CORS 预检或请求头被拦（截图发 AI）';
+  else verdict = '两根探针都通 → 刚才那次失败是瞬时抖动，会自动恢复';
+  lastProbe = { at: Date.now(), text: '[探针] ①裸GET ' + a + ' · ②带key ' + b + ' → ' + verdict };
+  return lastProbe.text;
 }
 
 async function pushCloud() {
@@ -667,6 +696,10 @@ async function pullCloud() {
     console.error('pullCloud', e);
     lastSyncError = '读取失败：' + describeErr(e);
     setSyncStatus('err', '同步失败');
+    // 失败时自动跑一次双探针（2 分钟内不重复），结果写进诊断——用户截一张图就能定位
+    autoProbe().then(t => {
+      if (t && lastSyncError) { lastSyncError += '\n' + t; renderDiag(); }
+    });
     // iOS 主屏 App 从后台唤醒后的第一发请求经常失败（网络栈还没醒），3 秒后自动补一次，
     // 免得用户每次打开都看到"同步失败"。补拉成功后 lastSyncError 会被清掉。
     if (!pullRetryTimer && syncConfig.enabled) {
@@ -1510,7 +1543,7 @@ async function forcePullCloud() {
   renderDiag();
   const tail = lastSyncError ? '\n\n✗ 拉取失败：' + lastSyncError : '\n\n✓ 已按云端数据刷新本机（API Key / 模型应已变过来）';
   if (box) box.textContent = diagLines().join('\n') + tail;
-  toast(lastSyncError ? '拉取失败：' + lastSyncError : '已用云端数据刷新本机', lastSyncError ? 'err' : 'ok');
+  toast(lastSyncError ? '拉取失败，详情见下方诊断面板' : '已用云端数据刷新本机', lastSyncError ? 'err' : 'ok');
 }
 
 function applyConfigFromUrl() {

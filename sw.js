@@ -1,5 +1,6 @@
 // 贝语 · Service Worker
 // 只缓存静态壳。真实数据在 localStorage 和 Supabase，不在这里。
+// v14：拉取失败自动双探针（结果并入诊断）；报错文案缩短；启动时清洗历史脏 key；toast 限宽
 // v13：移动端全面自适应（≤980px 弹窗紧凑、诊断按钮纵向堆叠、横屏分栏、≤380px 极窄屏优化）
 // v12：微信/QQ 内置浏览器打开时弹出「请用 Safari 打开」引导（webview 无 SW 且常拦 supabase.co）
 // v11：移除「欢迎使用」自动弹窗；新增「测试连接」双探针（极简 GET vs 带预检 GET，原始报错直出）；拉取失败 3s 自动补拉
@@ -16,7 +17,7 @@
 // v5：修同步新旧判定 / 拆 push·pull 锁
 // v3：应用更名（贝语）+ 导航改「网络优先」
 // v2：导航由缓存优先改网络优先（否则老用户永远看到旧版）
-const CACHE = 'beiyu-v13';
+const CACHE = 'beiyu-v14';
 const ASSETS = [
   './',
   './index.html',
