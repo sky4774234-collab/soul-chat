@@ -394,6 +394,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
         <button class="ghost sm" id="btn-test-conn">测试连接</button>
         <button class="ghost sm" id="btn-reset-shell">重置离线壳并刷新</button>
         <button class="ghost sm" id="btn-test-llm">测试模型</button>
+        <button class="ghost sm" id="btn-push-now">推送本机到云端</button>
       </div>
       <p class="hint">同步失败时先点上面的按钮：它会把版本号、配置、云端连通性、失败原因逐条列出来，截图发给 AI 就能定位。如果显示"连不上云端"，那是手机网络到 Supabase 不通（见下方排查），不是配置错。</p>
 
@@ -425,7 +426,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v20';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v23';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -603,9 +604,9 @@ async function autoProbe() {
 
 async function pushCloud() {
   if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
-  if (pushing) return;
+  if (pushing) { pendingPush = true; return; }   // 不静默丢弃：记下来，本轮结束后补推
   // 还没成功拉过一次 → 先不推，避免把本地空数据覆盖掉云端已有内容
-  if (!pulledOnce) { pendingPush = true; return; }
+  if (!pulledOnce) { pendingPush = true; pullCloud(); return; }   // 主动拉一次，拉完 finally 会自动补推
   pushing = true;
   setSyncStatus('syncing', '上传中');
   try {
@@ -652,7 +653,19 @@ async function pushCloud() {
       meta: { ...(state.meta || {}), serverUpdatedAt: stamp, lastPushOk: true },
     };
     const body = [{ id: 'main', data: payload, updated_at: stamp }];
-    const r = await fetch(base + '?id=eq.main', { method: 'POST', headers, body: JSON.stringify(body) });
+    // 超时是必须的：一旦请求永远不返回，pushing 锁就永久锁死——此后每次推送都被静默丢弃，
+    // 表现就是"能读到云端的消息，但自己说的话永远传不上去"（用户手机实测就是这个症状）。
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 25000);
+    let r;
+    try {
+      r = await fetch(base + '?id=eq.main', { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw new Error('上传超过 25 秒没响应（网络或写入被拦）');
+      throw e;
+    } finally {
+      clearTimeout(to);
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     // ✅ 确认写进云端了，才把时间戳落到本地；只改 meta，不去动本地 state 本身
     // （整体替换会把本地"正在等回复"的占位弄丢）
@@ -671,7 +684,23 @@ async function pushCloud() {
     setSyncStatus('err', '同步失败');
   } finally {
     pushing = false;
+    // 推送期间攒下的请求，补推一次（手机上"说完话后网络转好"这种情况会自动补上）
+    if (pendingPush) { pendingPush = false; setTimeout(() => pushCloud(), 0); }
   }
+}
+
+// 云端数据是否只是本机的前缀（=本机更靠前）。
+// 依据：消息 id 是唯一的，若云端的前 N 条与本地前 N 条完全一致、而本地还有更多，
+// 说明本机在云端基础上又说了话——直接把本机推上去，别让这段话永远留在本地。
+// （用户实测：手机上说的话电脑端收不到，就是因为推送失败后没有任何补救）
+function isLocalAhead(remoteMsgs, localMsgs) {
+  if (!Array.isArray(remoteMsgs) || !Array.isArray(localMsgs)) return false;
+  if (!remoteMsgs.length) return false;   // 云端为空：可能是另一端刚清空了对话，别把本机旧消息又推回去
+  if (localMsgs.length <= remoteMsgs.length) return false;
+  for (let i = 0; i < remoteMsgs.length; i++) {
+    if (!remoteMsgs[i] || !localMsgs[i] || remoteMsgs[i].id !== localMsgs[i].id) return false;
+  }
+  return true;
 }
 
 async function pullCloud() {
@@ -699,6 +728,10 @@ async function pullCloud() {
       // 此前的"时间戳比较 + mergeDeep 深合并"是与工作台唯一的实质差异，也是全部坑的来源，已废弃。
       const changed = JSON.stringify(remote) !== JSON.stringify(state);
       const pushPending = state.meta && state.meta.lastPushOk === false; // 本机有没推上去的改动，别让云端把它冲掉
+      if (isLocalAhead(remote.messages, state.messages)) {
+        pushCloud();          // 云端落后于本机 → 先把本机推上去（自愈，不再依赖用户手动）
+        return;
+      }
       if (changed && !pushPending) {
         state = remote;
         if (!state.meta) state.meta = {};
@@ -1667,10 +1700,71 @@ async function testConnection() {
   } catch (e) {
     lines.push('② 带 key 读取（同 App 真实请求）：✗ 原始报错「' + String((e && e.message) || e) + '」→ 预检/请求头环节的问题');
   }
+  // ③ 写入测试：POST 一行临时数据（__probe__）再删掉。
+  // 用户实测过"手机能读到电脑的消息、但手机说的话电脑收不到"——这就是"读通写不通"，
+  // 必须在同一台设备上把写单独测出来。
+  try {
+    const t0 = Date.now();
+    const r = await fetch(base + '/rest/v1/soul_chat?id=eq.__probe__', {
+      method: 'POST',
+      headers: {
+        'apikey': syncConfig.key,
+        'Authorization': 'Bearer ' + syncConfig.key,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify([{ id: '__probe__', data: { t: Date.now() }, updated_at: new Date().toISOString() }]),
+      cache: 'no-store',
+    });
+    lines.push('③ 写入测试（POST 临时行）：HTTP ' + r.status + '（' + (Date.now() - t0) + 'ms）');
+    if (r.ok) {
+      const d = await fetch(base + '/rest/v1/soul_chat?id=eq.__probe__', {
+        method: 'DELETE',
+        headers: { 'apikey': syncConfig.key, 'Authorization': 'Bearer ' + syncConfig.key },
+        cache: 'no-store',
+      });
+      lines.push('   临时行已清理：HTTP ' + d.status + ' → 读写都通');
+    } else {
+      const t = await r.text().catch(() => '');
+      lines.push('   → 写被拒：' + (r.status === 401 || r.status === 403 ? '密钥无写权限（RLS）' : t.slice(0, 120)));
+    }
+  } catch (e) {
+    lines.push('③ 写入测试（POST 临时行）：✗ 原始报错「' + String((e && e.message) || e) + '」');
+    lines.push('   → 读能通、写不通：写请求的预检被拦了（代理/拦截插件对 POST 更敏感）');
+  }
   lines.push('');
-  lines.push('判读：① 失败 = 这台 App 到 Supabase 网络不通（划掉 App 重开 / 重启手机 / 换网）；');
-  lines.push('　　　① 通 ② 败 = CORS 预检或请求头被拦（把本屏截图发 AI）。');
+  lines.push('判读：① 失败 = 这台设备到 Supabase 网络不通（划掉 App 重开 / 重启手机 / 换网）；');
+  lines.push('　　　①② 通 ③ 败 = 只能读不能写——多由代理/拦截插件拦 POST，先关代理或换网络；');
+  lines.push('　　　③ 通 = 读写都正常，那问题在别处（把本屏截图发 AI）。');
   box.textContent = lines.join('\n');
+}
+
+// 手动把本机数据推到云端，并把 HTTP 结果直接印出来。
+// 用途：手机"说了话但电脑收不到"时，一键看写入到底成不成功。
+async function pushNow() {
+  const box = document.getElementById('diag-box');
+  if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) {
+    if (box) box.textContent = '同步还没开启（设置里开一下，或用「从链接导入配置」）。';
+    return;
+  }
+  if (box) box.textContent = '正在推送本机数据到云端…';
+  pulledOnce = true;                 // 手动推送 = 明确授权：不要再被"首次拉取未完成"挡住
+  pendingPush = false;
+  const before = lastSyncError;
+  const t0 = Date.now();
+  await pushCloud();
+  const out = [];
+  if (lastSyncError) {
+    out.push('✗ 推送失败：' + lastSyncError);
+    out.push('（本机 ' + state.messages.length + ' 条消息仍只在本地）');
+  } else {
+    out.push('✓ 推送成功（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）· 已上传本机 ' + state.messages.length + ' 条消息');
+    out.push('电脑端 15 秒内会自动拉到。');
+  }
+  if (before && before !== lastSyncError) out.push('');
+  out.push('');
+  out.push(...diagLines());
+  if (box) box.textContent = out.join('\n');
 }
 
 // 测试模型接口：把「能不能聊天」的每一环都印出来（地址/密钥/HTTP/耗时/内容长度/原始错误）。
@@ -1836,6 +1930,10 @@ function init() {
   setupViewport();        // 软键盘弹出时保持输入框可见
   setupVersionSelfUpdate(); // 主动装新版，避免手机上一直跑旧代码
   setupForegroundSync();    // 切回前台立刻同步
+  // ⚠️ 必须真的启动同步：此前这里漏了 startSync()（v11 删欢迎弹窗时被误删），
+  // 后果是 pulledOnce 永远是 false → 所有推送被"待推"守卫静默吞掉，
+  // 而本地新说的话会在下一次拉取时被"云端优先"整条抹掉——正是"手机说了话电脑收不到"。
+  startSync();
   // 非 Safari 浏览器（微信/QQ/Chrome/Edge/Firefox/夸克/UC/百度…）：
   // 这类内核常拦截对 supabase.co 的 fetch（地址栏直开却通）——手机上「裸 GET 都 Load failed」的根源。
   if (/MicroMessenger|QQ\/|CriOS|EdgiOS|FxiOS|Quark|UCBrowser|UCAppStore|Baidu/i.test(navigator.userAgent)) {
@@ -1886,6 +1984,7 @@ function init() {
   document.getElementById('btn-test-conn').addEventListener('click', testConnection);
   document.getElementById('btn-reset-shell').addEventListener('click', resetShell);
   document.getElementById('btn-test-llm').addEventListener('click', testLLM);
+  document.getElementById('btn-push-now').addEventListener('click', pushNow);
   // 粘贴即导入：手机上少了「再点一次按钮」这步
   document.getElementById('set-import').addEventListener('paste', () => {
     setTimeout(() => {
