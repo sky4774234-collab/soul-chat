@@ -420,7 +420,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v14';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v15';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -673,21 +673,21 @@ async function pullCloud() {
 
     if (row && row.data) {
       const remote = row.data;
-      // 用行上的 updated_at 判断新旧，而不是消息时间戳
-      // （消息数为 0 时旧逻辑会永远判为"不更新"，导致新设备拿不到云端配置）
-      const remoteAt = row.updated_at || (remote.meta && remote.meta.serverUpdatedAt) || '';
-      const localAt = (state.meta && state.meta.serverUpdatedAt) || '';
-      const localKey = (state.settings && state.settings.apiKey) || '';
-      const remoteKey = (remote.settings && remote.settings.apiKey) || '';
-      if (shouldAdoptRemote(remoteAt, localAt, localKey, remoteKey)) {
-        state = mergeDeep(state, remote);       // 深度合并：settings（含 API Key）也会一并过来
+      // ===== 工作台同款规则（v15 重做）=====
+      // 「个人工作台」在同一台手机上同步正常，它的规则只有一条：
+      // 云端内容与本地不同 → 整份用云端的。没有时间戳比较、没有深合并。
+      // 此前的"时间戳比较 + mergeDeep 深合并"是与工作台唯一的实质差异，也是全部坑的来源，已废弃。
+      const changed = JSON.stringify(remote) !== JSON.stringify(state);
+      const pushPending = state.meta && state.meta.lastPushOk === false; // 本机有没推上去的改动，别让云端把它冲掉
+      if (changed && !pushPending) {
+        state = remote;
         if (!state.meta) state.meta = {};
-        state.meta.serverUpdatedAt = remoteAt;
-        state.meta.lastPushOk = true;
-        state.meta.configSource = 'cloud';
+        if (!state.settings) state.settings = {};
         localStorage.setItem(LS_KEY, JSON.stringify(state));
         render();
         toast('已从云端拉取最新数据', 'ok');
+      } else if (changed && pushPending) {
+        pushCloud();   // 本机有未上传的改动 → 先推，让云端追上本机
       }
     }
     lastSyncError = '';
@@ -1481,6 +1481,18 @@ async function runDiag() {
     }
   } catch (e) {
     lines.push('读取云端：✗ ' + describeErr(e));
+  }
+  // 对照实验（v15）：同一个 Supabase 项目里，「个人工作台」用的 workbench 表。
+  // 在同一个页面、同一个浏览器、同一时刻发起——结果只有两种可能：
+  //  ① workbench 也 ✗ → 这台浏览器到 supabase.co 的请求层被拦（环境问题，任何代码都救不了，换浏览器/关拦截插件）
+  //  ② workbench 通、soul_chat 败 → 是 soul_chat 表/权限的问题（我去改表配置就能修好）
+  try {
+    const r2 = await fetch(syncConfig.url.replace(/\/$/, '') + '/rest/v1/workbench?id=eq.main&select=updated_at', {
+      headers: { 'apikey': syncConfig.key, 'Authorization': 'Bearer ' + syncConfig.key },
+    });
+    lines.push('对照·workbench 表：HTTP ' + r2.status + (r2.ok ? ' ← 同项目另一张表读到了' : ''));
+  } catch (e2) {
+    lines.push('对照·workbench 表：✗ ' + describeErr(e2));
   }
   await pullCloud();
   box.textContent = lines.concat(['', '—— 触发一次同步后 ——'], diagLines()).join('\n');
