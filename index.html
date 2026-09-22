@@ -425,7 +425,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v19';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v20';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -643,14 +643,20 @@ async function pushCloud() {
     // 而云端还停在旧时间 → 本机此后永远判定"云端更旧"→ 再也不拉云端数据。
     // 用户看到的就是："我在电脑上早设成 deepseek 了，手机却一直是 openai 默认值。"
     // 正确做法：stamp 只写进"要发出去的 payload"，等 HTTP 确认成功了才认它。
+    // 不要把"还没回复"的空占位推上云：否则另一台设备会拉到一条空回复，
+    // 界面上永远显示成"思考中…"（用户实测过这个现象）。
+    const cleanMsgs = state.messages.filter(m => !(m.role === 'assistant' && !String(m.content || '').trim() && !m.reasoning));
     const payload = {
       ...state,
+      messages: cleanMsgs,
       meta: { ...(state.meta || {}), serverUpdatedAt: stamp, lastPushOk: true },
     };
     const body = [{ id: 'main', data: payload, updated_at: stamp }];
     const r = await fetch(base + '?id=eq.main', { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    state = payload;                       // ✅ 确实写进云端了，才把时间戳落到本地
+    // ✅ 确认写进云端了，才把时间戳落到本地；只改 meta，不去动本地 state 本身
+    // （整体替换会把本地"正在等回复"的占位弄丢）
+    state.meta = { ...(state.meta || {}), serverUpdatedAt: stamp, lastPushOk: true };
     localStorage.setItem(LS_KEY, JSON.stringify(state));
     lastSyncError = '';
     setSyncStatus('on', '已同步');
@@ -698,7 +704,7 @@ async function pullCloud() {
         if (!state.meta) state.meta = {};
         if (!state.settings) state.settings = {};
         localStorage.setItem(LS_KEY, JSON.stringify(state));
-        render();
+        render(true);   // 必须整体重画：远端可能改写了已有消息（占位 → 真回答）
         toast('已从云端拉取最新数据', 'ok');
       } else if (changed && pushPending) {
         pushCloud();   // 本机有未上传的改动 → 先推，让云端追上本机
@@ -936,9 +942,9 @@ function uid() {
 // ============================================================
 // Render
 // ============================================================
-function render() {
+function render(full) {
   renderPrinciples();
-  renderMessages();
+  renderMessages(full);
   applyTheme();
   renderSummaryStats();
   renderMemoryChip();
@@ -1011,7 +1017,7 @@ function renderPrinciples() {
   });
 }
 
-function renderMessages() {
+function renderMessages(full) {
   const wrap = document.getElementById('messages');
   const empty = document.getElementById('empty-state');
   if (!state.messages.length) {
@@ -1020,6 +1026,11 @@ function renderMessages() {
     return;
   }
   empty.style.display = 'none';
+  // full=true：整体重画。用于"云端把已有消息改写了"的场合
+  // （典型：另一端先推了"思考中"占位、随后推来真正的回答——只增不改的 diff 会让它永远停在思考中）
+  if (full) {
+    wrap.querySelectorAll('.bubble').forEach(n => n.remove());
+  }
   // diff: keep existing bubbles, only append new
   const existing = new Set();
   wrap.querySelectorAll('.bubble').forEach(n => existing.add(n.dataset.id));
@@ -1155,15 +1166,16 @@ async function onSend() {
     } else {
       aiMsg.content = '（模型返回了空内容）';
     }
-    state.messages[state.messages.length - 1] = aiMsg;
+    const idx = state.messages.findIndex(m => m.id === aiMsg.id);
+    if (idx >= 0) state.messages[idx] = aiMsg; else state.messages.push(aiMsg);
     saveState();
     refreshBubble(aiMsg);   // 带思考内容重画这一条
     // 后台检查是否需要压缩长期记忆
     doAutoSummarize(false);
   } catch (e) {
     console.error(e);
-    // 回滚空的 ai 占位
-    state.messages.pop();
+    // 回滚空的 ai 占位（按 id 移除，不依赖位置）
+    state.messages = state.messages.filter(m => m.id !== aiMsg.id);
     pendingIds.delete(aiMsg.id);
     saveState();
     renderMessages();
