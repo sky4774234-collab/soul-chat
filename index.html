@@ -254,7 +254,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <div id="wechat-tip" class="hidden" style="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px">
   <div style="background:#fff;border-radius:14px;max-width:420px;width:100%;padding:22px 20px;color:#222;line-height:1.7;font-size:15px">
     <h3 style="margin:0 0 10px;font-size:17px">请在 Safari 中打开贝语</h3>
-    <p style="margin:0 0 12px">你正在微信里浏览。微信内置浏览器不支持离线缓存，还常拦截同步请求——这就是「同步失败」的原因。微信本身打不开它，不是配置问题。</p>
+    <p id="wechat-tip-msg" style="margin:0 0 12px">你正在微信里浏览。微信内置浏览器不支持离线缓存，还常拦截同步请求——这就是「同步失败」的原因。微信本身打不开它，不是配置问题。</p>
     <p style="margin:0 0 16px"><strong>正确做法（一次即可）：</strong><br>
     1. 点右上角「···」→ 选择「在浏览器中打开」（或「复制链接」后在 Safari 粘贴打开）<br>
     2. 在 Safari 里点分享按钮 → 「添加到主屏幕」<br>
@@ -420,7 +420,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v15';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v16';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -1425,10 +1425,32 @@ function onImportFromClipboard() {
 // ============================================================
 // 同步自检：手机上开不了控制台，把关键信息直接印在设置里
 // ============================================================
+// 识别当前浏览器环境：手机上同步是否被拦，基本由"用哪个浏览器打开"决定
+function browserEnv() {
+  const ua = navigator.userAgent || '';
+  const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  let name = '未知浏览器';
+  if (/MicroMessenger/i.test(ua)) name = '微信内置浏览器';
+  else if (/QQ\//i.test(ua)) name = 'QQ内置浏览器';
+  else if (/CriOS/i.test(ua)) name = 'Chrome iOS';
+  else if (/EdgiOS/i.test(ua)) name = 'Edge iOS';
+  else if (/FxiOS/i.test(ua)) name = 'Firefox iOS';
+  else if (/Quark/i.test(ua)) name = '夸克';
+  else if (/UCBrowser|UCAppStore/i.test(ua)) name = 'UC浏览器';
+  else if (/Baidu/i.test(ua)) name = '百度浏览器';
+  else if (/Safari/i.test(ua)) name = 'Safari';
+  else if (/iPhone|iPad|Android/i.test(ua)) name = '其他App内置浏览器';
+  else name = '桌面浏览器';
+  const risk = (/MicroMessenger|QQ\/|CriOS|EdgiOS|FxiOS|Quark|UCBrowser|UCAppStore|Baidu/i.test(ua))
+    ? ' ⚠️ 非 Safari，同步请求可能被拦，请用 Safari 打开' : '';
+  return name + (standalone ? '·主屏App' : '') + risk + '\nUA: ' + ua.slice(0, 90);
+}
+
 function diagLines() {
   const l = [];
   const swOk = ('serviceWorker' in navigator) && navigator.serviceWorker.controller;
   l.push('版本：' + APP_VERSION + (swOk ? '（离线壳已接管）' : '（未接管，可能是首次加载）'));
+  l.push('环境：' + browserEnv());
   l.push('同步开关：' + (syncConfig.enabled ? '已开启' : '未开启'));
   if (syncConfig.url) l.push('Supabase 地址：' + syncConfig.url);
   if (syncConfig.key) l.push('Anon Key：已填 ' + syncConfig.key.length + ' 字符');
@@ -1604,8 +1626,11 @@ function init() {
   setupViewport();        // 软键盘弹出时保持输入框可见
   setupVersionSelfUpdate(); // 主动装新版，避免手机上一直跑旧代码
   setupForegroundSync();    // 切回前台立刻同步
-  // 微信/QQ 等内置浏览器：无 SW、常拦 supabase.co，直接给出"去 Safari"引导
-  if (/MicroMessenger|QQ\//i.test(navigator.userAgent)) {
+  // 非 Safari 浏览器（微信/QQ/Chrome/Edge/Firefox/夸克/UC/百度…）：
+  // 这类内核常拦截对 supabase.co 的 fetch（地址栏直开却通）——手机上「裸 GET 都 Load failed」的根源。
+  if (/MicroMessenger|QQ\/|CriOS|EdgiOS|FxiOS|Quark|UCBrowser|UCAppStore|Baidu/i.test(navigator.userAgent)) {
+    const msg = document.getElementById('wechat-tip-msg');
+    if (msg) msg.textContent = '你正在用非 Safari 浏览器打开贝语。这类浏览器（微信 / Chrome / Edge / 夸克等）常拦截对 Supabase 的同步请求——你看到的「Load failed / 同步失败」就是这么来的，不是配置错。Safari 已验证可以正常同步。';
     document.getElementById('wechat-tip').classList.remove('hidden');
   }
   render();
