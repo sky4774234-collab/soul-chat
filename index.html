@@ -421,7 +421,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v17';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v18';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -1280,13 +1280,22 @@ function onGenPhoneLink() {
     return;
   }
   document.getElementById('set-sync-url').value = u;
+  // v18：把 LLM 配置也打包进链接（API Base / 模型 / API Key）。
+  // 这样即使手机所处的浏览器或网络拦掉了对 Supabase 的请求（同步永远失败），
+  // 贴一次链接手机也能直接聊天——不再被同步问题拖住。
+  const _b = (document.getElementById('set-base').value || '').trim();
+  const _m = (document.getElementById('set-model').value || '').trim();
+  const _a = (document.getElementById('set-key').value || '').trim();
   const link = location.origin + location.pathname +
-    '?u=' + encodeURIComponent(u) + '&k=' + encodeURIComponent(k);
+    '?u=' + encodeURIComponent(u) + '&k=' + encodeURIComponent(k) +
+    (_b ? '&b=' + encodeURIComponent(_b) : '') +
+    (_m ? '&m=' + encodeURIComponent(_m) : '') +
+    (_a ? '&a=' + encodeURIComponent(_a) : '');
   const box = document.getElementById('set-phone-link');
   box.value = link;
   box.style.display = '';
   document.getElementById('btn-copy-link').style.display = '';
-  toast('链接已生成，点"复制"发到手机', 'ok');
+  toast(_a ? '链接已生成（含 API 配置），发到手机粘一次即可用' : '链接已生成，点"复制"发到手机', 'ok');
 }
 
 async function onCopyPhoneLink() {
@@ -1320,7 +1329,7 @@ function cleanKey(k) {
 function parseConfigLink(text) {
   const s = (text || '').trim();
   if (!s) return null;
-  let u = '', k = '';
+  let u = '', k = '', base = '', model = '', apiKey = '';
 
   // 先把"链接本身"抠出来。粘贴时经常带着前后文字（"看这个 <链接> 手机上打开"），
   // 不抠干净的话，链接尾巴上的中文会被当成 k 的一部分 → 密钥就是错的 → 同步必然失败。
@@ -1337,6 +1346,9 @@ function parseConfigLink(text) {
       const q = new URLSearchParams(qs);
       u = (q.get('u') || '').trim();
       k = (q.get('k') || '').trim();
+      base = (q.get('b') || '').trim();
+      model = (q.get('m') || '').trim();
+      apiKey = (q.get('a') || '').trim();
     } catch (e) {}
   }
 
@@ -1346,6 +1358,9 @@ function parseConfigLink(text) {
       const o = JSON.parse(s);
       u = u || String(o.u || o.url || o.supabaseUrl || '').trim();
       k = k || String(o.k || o.key || o.anonKey || '').trim();
+      base = base || String(o.b || o.base || o.apiBase || '').trim();
+      model = model || String(o.m || o.model || '').trim();
+      apiKey = apiKey || String(o.a || o.apiKey || '').trim();
     } catch (e) {}
   }
 
@@ -1365,7 +1380,7 @@ function parseConfigLink(text) {
   k = cleanKey(k);
 
   if (!u || !k) return null;
-  return { url: normalizeSupabaseUrl(u), key: k };
+  return { url: normalizeSupabaseUrl(u), key: k, base: base, model: model, apiKey: apiKey };
 }
 
 function applyImportConfig(cfg, silent) {
@@ -1386,6 +1401,10 @@ function applyImportConfig(cfg, silent) {
   if (eEl) eEl.checked = true;
   const box = document.getElementById('set-import');
   if (box) box.value = '';
+  // 链接里若带了 API 配置，一并落地（同步连不上也能用）
+  if (cfg.base || cfg.model || cfg.apiKey) {
+    applyLlmConfig({ base: cfg.base, model: cfg.model, apiKey: cfg.apiKey });
+  }
 
   setSyncStatus('syncing', '连接中');
   Promise.resolve(startSync()).then(() => {
@@ -1395,6 +1414,10 @@ function applyImportConfig(cfg, silent) {
       toast('同步失败：' + (lastSyncError || '连不上云端'), 'err');
       return;
     }
+    const bEl = document.getElementById('set-base');
+    const mEl = document.getElementById('set-model');
+    if (bEl && !bEl.value.trim() && state.settings.apiBase) bEl.value = state.settings.apiBase;
+    if (mEl && !mEl.value.trim() && state.settings.model) mEl.value = state.settings.model;
     const keyBox = document.getElementById('set-key');
     if (keyBox && !keyBox.value.trim() && state.settings.apiKey) {
       keyBox.value = state.settings.apiKey;
@@ -1599,19 +1622,43 @@ async function forcePullCloud() {
   toast(lastSyncError ? '拉取失败，详情见下方诊断面板' : '已用云端数据刷新本机', lastSyncError ? 'err' : 'ok');
 }
 
+// LLM 配置（API Base / 模型 / API Key）单独导入。
+// 设计目的：同步会被浏览器/网络拦，但"能聊天"不该被它拖住。
+function applyLlmConfig(cfg) {
+  if (!cfg) return false;
+  let changed = false;
+  if (cfg.base) { state.settings.apiBase = cfg.base; changed = true; }
+  if (cfg.model) { state.settings.model = cfg.model; changed = true; }
+  if (cfg.apiKey) { state.settings.apiKey = cleanKey(cfg.apiKey); changed = true; }
+  if (!changed) return false;
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+  return true;
+}
+
 function applyConfigFromUrl() {
-  let u = '', k = '';
+  let u = '', k = '', b = '', m = '', a = '';
   try {
     const q = new URLSearchParams(location.search);
     u = (q.get('u') || '').trim();
     k = (q.get('k') || '').trim();
-    if (!u || !k) {
+    b = (q.get('b') || '').trim();
+    m = (q.get('m') || '').trim();
+    a = (q.get('a') || '').trim();
+    if (!u || !k || !a) {
       const h = new URLSearchParams(location.hash.replace(/^#/, ''));
       u = u || (h.get('u') || '').trim();
       k = k || (h.get('k') || '').trim();
+      b = b || (h.get('b') || '').trim();
+      m = m || (h.get('m') || '').trim();
+      a = a || (h.get('a') || '').trim();
     }
   } catch (e) { return; }
-  if (!u || !k) return;
+  // API 配置先落地：即使下面同步连不上，手机也已经能聊天了
+  const llmApplied = applyLlmConfig({ base: b, model: m, apiKey: a });
+  if (!u || !k) {
+    if (llmApplied) setTimeout(() => toast('已导入 API 配置，可以直接聊天了', 'ok'), 700);
+    return;
+  }
   syncConfig.url = normalizeSupabaseUrl(u);
   syncConfig.key = k;
   syncConfig.enabled = true;
