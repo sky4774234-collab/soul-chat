@@ -441,7 +441,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v26';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v29';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -474,6 +474,33 @@ let pushing = false;
 let pulling = false;
 let pulledOnce = false;   // 是否成功从云端拉取过（防止本地空数据覆盖云端）
 let pullRetryTimer = null; // 拉取失败后的自动补拉定时器
+// ===== 同步安全带（v28）=====
+// 起因：在极端环境测试时观测到同步请求失控（4 秒 250 次、6 秒 10582 次）。
+// 无论根因是什么，"请求打成风暴"这种事都不允许发生在用户手机上——耗电、发热、被后端限流。
+// 规则：① 拉取最小间隔 2 秒；② 10 秒内同步请求超过 12 次 → 自动停 30 秒并如实告知。
+const _syncLog = [];
+let _syncPausedUntil = 0;
+let _probeInFlight = false;
+let lastPullDoneAt = 0;   // 上次拉取成功的时间（用于切断「推送↔拉取」互相触发）
+function takeSyncSlot(kind) {
+  const now = Date.now();
+  if (now < _syncPausedUntil) return false;
+  while (_syncLog.length && now - _syncLog[0] > 10000) _syncLog.shift();
+  if (_syncLog.length >= 12) {
+    _syncPausedUntil = now + 30000;
+    lastSyncError = '同步请求异常频繁，已自动暂停 30 秒（期间数据不受影响，稍后自动恢复）';
+    setSyncStatus('err', '已暂停');
+    console.warn('sync storm guard: paused 30s');
+    return false;
+  }
+  if (kind === 'pull') {
+    const last = _syncLog.length ? _syncLog[_syncLog.length - 1] : 0;
+    if (now - last < 2000) return false;   // 拉取最快 2 秒一次
+  }
+  _syncLog.push(now);
+  return true;
+}
+
 let pullFailStreak = 0;    // 连续失败次数 → 指数退避，防止后端异常时把请求打爆（手机上会耗电发热）
 let lastPullKick = 0;      // 上次因推送而触发拉取的时间（节流，防 push/pull 互相触发）
 let pendingPush = false;  // 拉取完成前产生的本地改动，拉完补推
@@ -597,7 +624,15 @@ function describeErr(e) {
 let lastProbe = { at: 0, text: '' };
 async function autoProbe() {
   if (!syncConfig.url || !syncConfig.key) return '';
-  if (Date.now() - lastProbe.at < 120000) return lastProbe.text;
+  if (_probeInFlight) return lastProbe.text;                     // 上一轮还没跑完就别再发
+  if (Date.now() - lastProbe.at < 120000) return lastProbe.text; // 2 分钟内不重复
+  lastProbe = { at: Date.now(), text: '（正在检测…）' };          // 先占位：否则一旦卡住，节流形同虚设
+  _probeInFlight = true;
+  try { return await _autoProbeRun(); } finally { _probeInFlight = false; }
+}
+
+async function _autoProbeRun() {
+  if (!syncConfig.url || !syncConfig.key) return '';
   const base = syncConfig.url.replace(/\/$/, '');
   let a = '', b = '';
   try {
@@ -621,7 +656,8 @@ async function autoProbe() {
 
 async function pushCloud() {
   if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
-  if (pushing) { pendingPush = true; return; }   // 不静默丢弃：记下来，本轮结束后补推
+  if (pushing) { pendingPush = true; return; }
+  if (!takeSyncSlot('push')) { pendingPush = true; return; }   // 被刹车时段拦下也不丢改动   // 不静默丢弃：记下来，本轮结束后补推
   // 还没成功拉过一次 → 先不推，避免把本地空数据覆盖掉云端已有内容
   if (!pulledOnce) {
     // 首次拉取还没成功：先被动等（拉完会自动补推），最多 5 秒踢一次；
@@ -646,7 +682,10 @@ async function pushCloud() {
         const rows = await probe.json();
         const remoteAt = rows && rows[0] && rows[0].updated_at;
         const localAt = (state.meta && state.meta.serverUpdatedAt) || '';
-        if (shouldAdoptRemote(remoteAt, localAt)) {
+        // 刚刚（4 秒内）已经拉取并合并过 → 不再转去拉，直接上传；
+        // 否则这里会和"本机领先就推送"互相触发成无限循环。
+        const justPulled = Date.now() - lastPullDoneAt < 4000;
+        if (!justPulled && shouldAdoptRemote(remoteAt, localAt)) {
           pendingPush = true;        // 先合并云端的新数据，拉完会自动补推本次改动
           pushing = false;
           await pullCloud();
@@ -712,6 +751,18 @@ async function pushCloud() {
   }
 }
 
+// 消息合并：按 id 取并集，按时间排序。同 id 以本机为准。
+// 为什么不用"整份覆盖"：两台设备各自说的话，谁先推谁后推不定，整份覆盖必然丢掉一边——
+// 用户实测过"手机上的记录没有同步到网页端"，所以消息这一项必须合并，不能覆盖。
+function mergeMessages(localMsgs, remoteMsgs) {
+  const l = Array.isArray(localMsgs) ? localMsgs : [];
+  const r = Array.isArray(remoteMsgs) ? remoteMsgs : [];
+  const byId = new Map();
+  r.forEach(m => { if (m && m.id) byId.set(m.id, m); });
+  l.forEach(m => { if (m && m.id) byId.set(m.id, m); });   // 本机覆盖同 id
+  return Array.from(byId.values()).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+}
+
 // 云端数据是否只是本机的前缀（=本机更靠前）。
 // 依据：消息 id 是唯一的，若云端的前 N 条与本地前 N 条完全一致、而本地还有更多，
 // 说明本机在云端基础上又说了话——直接把本机推上去，别让这段话永远留在本地。
@@ -729,6 +780,7 @@ function isLocalAhead(remoteMsgs, localMsgs) {
 async function pullCloud() {
   if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
   if (pulling) return;
+  if (!takeSyncSlot('pull')) return;
   pulling = true;
   setSyncStatus('syncing', '拉取中');
   try {
@@ -742,6 +794,8 @@ async function pullCloud() {
     const arr = await r.json();
     const row = arr && arr[0];
     pulledOnce = true;   // 请求成功（即使还没有数据行）→ 允许后续推送
+    lastPullDoneAt = Date.now();
+    const remoteRowAt = (row && row.updated_at) || '';   // 云端这一版的更新时间
 
     if (row && row.data) {
       const remote = row.data;
@@ -757,12 +811,28 @@ async function pullCloud() {
         return;
       }
       if (changed && !pushPending) {
+        const remoteMsgs = (remote.messages || []);
+        const localMsgs = (state.messages || []);
+        const remoteCleared = (remote.meta && remote.meta.clearedAt) || 0;
+        const localCleared = (state.meta && state.meta.clearedAt) || 0;
+        let merged;
+        if (remoteCleared > localCleared) merged = remoteMsgs;        // 另一端明确清空过 → 服从
+        else if (localCleared > remoteCleared) merged = localMsgs;    // 本端明确清空过 → 保持空
+        else merged = mergeMessages(localMsgs, remoteMsgs);           // 常规：并集，谁的都不丢
         state = remote;
         if (!state.meta) state.meta = {};
         if (!state.settings) state.settings = {};
+        state.messages = merged;
+        // 关键：把"我看到的云端版本时间"记下来。
+        // 不记的话，pushCloud 上传前的"云端是不是比我新"探测会永远认为云端更新 →
+        // 又一次次转去拉取 → 与"本机领先就推送"互相触发，形成无限循环（实测 6 秒上千请求）。
+        if (remoteRowAt) state.meta.serverUpdatedAt = remoteRowAt;
+        state.meta.lastSeenRemoteAt = remoteRowAt;
         localStorage.setItem(LS_KEY, JSON.stringify(state));
         render(true);   // 必须整体重画：远端可能改写了已有消息（占位 → 真回答）
-        toast('已从云端拉取最新数据', 'ok');
+        // 合并结果比云端多 → 本机有云端没有的消息，立刻推上去（正是"手机记录没上去"的场景）
+        if (merged.length > remoteMsgs.length) { pushCloud(); }
+        else { toast('已从云端拉取最新数据', 'ok'); }
       } else if (changed && pushPending) {
         pushCloud();   // 本机有未上传的改动 → 先推，让云端追上本机
       }
@@ -1347,6 +1417,8 @@ function onSaveSettings() {
 function onClearMessages() {
   if (!confirm('清空全部对话？此操作不可撤销。')) return;
   state.messages = [];
+  state.meta = state.meta || {};
+  state.meta.clearedAt = Date.now();   // 标记"是我主动清空的"，否则另一端的并集合并会把旧消息带回来
   saveState();
   render();
   toast('已清空对话', 'ok');
