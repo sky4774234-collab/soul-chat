@@ -441,7 +441,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v24';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v25';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -742,7 +742,8 @@ async function pullCloud() {
       // 云端内容与本地不同 → 整份用云端的。没有时间戳比较、没有深合并。
       // 此前的"时间戳比较 + mergeDeep 深合并"是与工作台唯一的实质差异，也是全部坑的来源，已废弃。
       const changed = JSON.stringify(remote) !== JSON.stringify(state);
-      const pushPending = state.meta && state.meta.lastPushOk === false; // 本机有没推上去的改动，别让云端把它冲掉
+      const pushPending = pushing || pendingPush || (state.meta && state.meta.lastPushOk === false);
+      // 本机有未上云的改动（或推送正在飞）时，绝不用云端旧值覆盖本地——这是"刚改完就被改回去"的根源
       if (isLocalAhead(remote.messages, state.messages)) {
         pushCloud();          // 云端落后于本机 → 先把本机推上去（自愈，不再依赖用户手动）
         return;
@@ -780,7 +781,7 @@ async function pullCloud() {
   }
 }
 
-function startSync() {
+function startSync(noPull) {
   if (syncTimer) clearInterval(syncTimer);
   if (pullRetryTimer) { clearTimeout(pullRetryTimer); pullRetryTimer = null; }
   syncConfig.url = normalizeSupabaseUrl(syncConfig.url);
@@ -789,6 +790,10 @@ function startSync() {
       setSyncStatus('syncing', '连接中');   // 还没连上过就别假装"已同步"
     }
     syncTimer = setInterval(pullCloud, 15000);
+    // noPull=true：只起定时器，先不拉。
+    // 用于"刚保存了本地设置"的场合——此时推送还在路上，立刻拉回来的还是云端旧值，
+    // 「云端优先」会把用户刚改的模型（如 DeepSeek）覆盖回默认的 gpt（用户实测"改也改不了"）。
+    if (noPull) return Promise.resolve();
     return pullCloud();   // 返回首次拉取 promise，调用方可等待同步完成
   }
   setSyncStatus(null, '本地');
@@ -1313,12 +1318,19 @@ function onSaveSettings() {
   syncConfig.key = document.getElementById('set-sync-key').value.trim();
   document.getElementById('set-sync-url').value = syncConfig.url;   // 回填清洗后的地址，让用户看见实际用的值
   saveSyncConfig();
+  // 关键顺序：先把"本地有未上云的改动"标记打上（同步执行，抢在任何拉取之前），
+  // 再 saveState()（内部推送），最后 startSync(true) 只起定时器、不立刻拉取。
+  // 否则：推送还在路上 → 拉取拿回云端旧值 → 「云端优先」把刚保存的模型覆盖掉。
+  state.meta = state.meta || {};
+  state.meta.lastPushOk = false;
   saveState();
   render();
   renderSummaryStats();
-  startSync();
+  startSync(true);
   hideSettings();
-  toast(syncConfig.enabled ? '已保存，正在同步…' : '已保存', 'ok');
+  toast(syncConfig.enabled
+    ? '已保存 · 模型 ' + state.settings.model + (state.settings.thinking ? '（思考开）' : '（思考关）') + '，正在同步…'
+    : '已保存 · 模型 ' + state.settings.model, 'ok');
 }
 
 function onClearMessages() {
