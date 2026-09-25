@@ -441,7 +441,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 // ============================================================
 
 const APP_NAME = '贝语';
-const APP_VERSION = 'v25';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
+const APP_VERSION = 'v26';   // 每次改前端都 +1，并同步改 sw.js 里的 CACHE；手机上可在设置里核对
 const LS_KEY = 'soul-chat-v1';
 const SYNC_LS_KEY = 'soul-chat-sync-config';
 const DEFAULT_API_BASE = 'https://api.openai.com/v1';
@@ -474,6 +474,8 @@ let pushing = false;
 let pulling = false;
 let pulledOnce = false;   // 是否成功从云端拉取过（防止本地空数据覆盖云端）
 let pullRetryTimer = null; // 拉取失败后的自动补拉定时器
+let pullFailStreak = 0;    // 连续失败次数 → 指数退避，防止后端异常时把请求打爆（手机上会耗电发热）
+let lastPullKick = 0;      // 上次因推送而触发拉取的时间（节流，防 push/pull 互相触发）
 let pendingPush = false;  // 拉取完成前产生的本地改动，拉完补推
 
 // ============================================================
@@ -621,7 +623,13 @@ async function pushCloud() {
   if (!syncConfig.enabled || !syncConfig.url || !syncConfig.key) return;
   if (pushing) { pendingPush = true; return; }   // 不静默丢弃：记下来，本轮结束后补推
   // 还没成功拉过一次 → 先不推，避免把本地空数据覆盖掉云端已有内容
-  if (!pulledOnce) { pendingPush = true; pullCloud(); return; }   // 主动拉一次，拉完 finally 会自动补推
+  if (!pulledOnce) {
+    // 首次拉取还没成功：先被动等（拉完会自动补推），最多 5 秒踢一次；
+    // 否则"推送→去拉→失败→又推送"会互相触发成热循环，一秒能打出上百个请求。
+    pendingPush = true;
+    if (Date.now() - lastPullKick > 5000) { lastPullKick = Date.now(); pullCloud(); }
+    return;
+  }
   pushing = true;
   setSyncStatus('syncing', '上传中');
   try {
@@ -760,6 +768,7 @@ async function pullCloud() {
       }
     }
     lastSyncError = '';
+    pullFailStreak = 0;      // 拉取成功 → 清零退避
     setSyncStatus('on', '已同步');
   } catch (e) {
     console.error('pullCloud', e);
@@ -772,7 +781,9 @@ async function pullCloud() {
     // iOS 主屏 App 从后台唤醒后的第一发请求经常失败（网络栈还没醒），3 秒后自动补一次，
     // 免得用户每次打开都看到"同步失败"。补拉成功后 lastSyncError 会被清掉。
     if (!pullRetryTimer && syncConfig.enabled) {
-      pullRetryTimer = setTimeout(() => { pullRetryTimer = null; pullCloud(); }, 3000);
+      pullFailStreak = Math.min(pullFailStreak + 1, 6);
+      const delay = Math.min(3000 * Math.pow(2, pullFailStreak - 1), 60000);   // 3s→6s→12s→24s→48s→60s
+      pullRetryTimer = setTimeout(() => { pullRetryTimer = null; pullCloud(); }, delay);
     }
   } finally {
     pulling = false;
